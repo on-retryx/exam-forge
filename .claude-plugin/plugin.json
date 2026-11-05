@@ -1,0 +1,10 @@
+{
+  "name": "soru-kitabi",
+  "version": "0.1.0",
+  "description": "Ders notu PDF'lerinden yalnız o kaynağa dayanan, bağımsız bir doğrulayıcıdan geçmiş sorularla PDF soru kitabı üretir (test, klasik, karma).",
+  "author": {"name": "Retry-X", "url": "https://github.com/on-retryx"},
+  "homepage": "https://github.com/on-retryx/soru-kitabi",
+  "repository": "https://github.com/on-retryx/soru-kitabi",
+  "license": "MIT",
+  "keywords": ["sınav", "soru", "eğitim", "pdf", "quiz", "exam", "question-generation", "multi-agent"]
+}

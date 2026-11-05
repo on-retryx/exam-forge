@@ -1,0 +1,18 @@
+{
+  "_aciklama": "Varsayılan ayarlar. Değiştirmek için bu dosyayı düzenleme; ~/.config/soru-kitabi/ayarlar.json içine yalnız değiştirmek istediğin anahtarları yaz.",
+  "alan": "",
+  "cikti_klasoru": "",
+  "zorluk_oranlari": {"kolay": 0.25, "orta": 0.40, "zor": 0.35},
+  "kisa_pdf_sayfa_esigi": 20,
+  "kisa_pdf_soru_secenekleri": [10, 15],
+  "uzun_pdf_sayfa_basina_soru": 1.0,
+  "parca_esigi": 25,
+  "parca_boyu": 20,
+  "ince_sayfa_alt_oran": 0.6,
+  "test_sik_sayisi": 5,
+  "ekonomik_mod": false,
+  "modeller": {"yazar": "sonnet", "dogrulayici": "opus", "dogrulayici_ekonomik": "sonnet"},
+  "konu_degistir_turu": 4,
+  "en_cok_tur": 6,
+  "chrome": ""
+}
