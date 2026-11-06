@@ -108,9 +108,9 @@ When an editor finishes, do not wait for the others; move that chunk forward:
 On a job with `plan.budget`, run `$PY "$FORGE" cost "<run>" --budget-check` before each new round. Exit 6 means spending has passed 120% of the target: ask with `--option "continue=Keep going" --option "stop=Stop and print what is verified"`. It fires once per job. Stopping still needs the shorter-book approval below.
 
 For failures from any layer:
-1. Start a new editor in correction mode: rejected ids, old questions, the feedback, the instruction to write new ones with the same difficulty and type, a short list of the other questions (to avoid repeats), output `<run>/<stem>/fix-N-roundK.json`.
+1. Start a new editor in correction mode: rejected ids, old questions, the feedback, the instruction to write new ones with the same difficulty and type, a short list of the other questions (to avoid repeats), the marks file with `s.marked_text_priority` and `s.marked_text_share`, output `<run>/<stem>/fix-N-roundK.json`.
 2. `$PY "$FORGE" replace <chunk> <fix.json>`
-3. Screen those ids again. Then, to review them, get the pages with `$PY "$FORGE" source-pages <chunk> --ids a,b`, and give the reviewer only those ids and those pages. Never send a whole chunk back for review; repeating pages is the main cost. Output `review-N-round(K+1).json`, then `approve`.
+3. Screen those ids again. Then, to review them, get the pages with `$PY "$FORGE" source-pages <chunk> --ids a,b`, and give the reviewer only those ids, those pages and the marks file. Never send a whole chunk back for review; repeating pages is the main cost. Output `review-N-round(K+1).json`, then `approve`.
 4. Repeat until nothing fails. After `s.topic_change_round` rounds, have the editor choose **a different topic** in the same page range (same difficulty and type). After `s.max_rounds`, ask the user: drop that question and print a shorter book, or continue. Never print a shorter book without approval.
 
 **Decisions on a form job.** The user is watching the Studio, not the chat, so every question during the job goes there, including this one and the page tool install above. Start this with `run_in_background: true` and keep working on other chunks:

@@ -536,6 +536,83 @@ class Command(Case):
         found = {m["text"]: m["role"] for m in self.marks(self.pdf(build))["marks"]}
         self.assertEqual(found, {"energy": "emphasis", "proteins": "excluded", "nucleus": "emphasis"})
 
+    def turned_page(self, rotation):
+        """Text that reads upright only on the rotated page, as in a landscape slide stored sideways.
+
+        Everything is drawn in unrotated coordinates, so a mark helper that skips the rotation sees a line
+        running along the letters, or on a page turned by 180, an underline above them.
+        """
+        w, h, size = 600, 800, 14
+        spot = {90: ((100, 700), 90), 180: ((500, 700), 180), 270: ((500, 100), 270)}
+        origin, angle = spot[rotation]
+        below = {90: (1, 0), 180: (0, -1), 270: (-1, 0)}[rotation]  # "down" on the rotated page
+
+        def line(page, text, offset):
+            r = word(page, text)
+            if below[0]:  # the words run up or down the unrotated page
+                x = origin[0] + below[0] * offset
+                page.draw_line((x, r.y0), (x, r.y1), color=(0, 0, 0), width=0.8)
+            else:
+                y = origin[1] + below[1] * offset
+                page.draw_line((r.x0, y), (r.x1, y), color=(0, 0, 0), width=0.8)
+
+        @blank
+        def build(p):
+            p.insert_text(origin, "alpha beta gamma", fontsize=size, rotate=angle)
+            line(p, "alpha", 1.5)  # under the letters
+            line(p, "beta", -0.26 * size)  # through them
+            p.add_highlight_annot(word(p, "gamma"))
+            p.set_rotation(rotation)
+        return self.pdf(build, size=(w, h))
+
+    def test_rotated_page_keeps_underline_and_strikethrough_apart(self):
+        for rotation in (90, 180, 270):
+            with self.subTest(rotation=rotation):
+                found = {m["text"]: (m["kind"], m["role"]) for m in self.marks(self.turned_page(rotation))["marks"]}
+                self.assertEqual(found, {"alpha": ("underline", "emphasis"), "beta": ("strikethrough", "excluded"),
+                                         "gamma": ("highlight", "emphasis")})
+
+    def test_rotated_page_lists_marks_in_reading_order_inside_the_page(self):
+        for rotation in (90, 180, 270):
+            with self.subTest(rotation=rotation):
+                path = self.turned_page(rotation)
+                found = self.marks(path)["marks"]
+                self.assertEqual([m["text"] for m in found], ["alpha", "beta", "gamma"])
+                doc = fitz.open(str(path))
+                area = doc[0].rect
+                doc.close()
+                for m in found:
+                    self.assertTrue(0 <= m["bbox"][0] < m["bbox"][2] <= area.width, m)
+                    self.assertTrue(0 <= m["bbox"][1] < m["bbox"][3] <= area.height, m)
+
+    def test_page_wide_rule_is_measured_on_the_rotated_page(self):
+        @blank
+        def build(p):
+            p.insert_text((100, 700), "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi "
+                                      "omicron pi rho sigma tau upsilon phi chi psi omega", fontsize=14, rotate=90)
+            p.draw_line((101.5, 770), (101.5, 30), color=(0, 0, 0), width=0.8)  # 740 of the 800 across
+            p.set_rotation(90)
+        self.none(build, size=(600, 800))
+
+    def test_full_underlined_line_is_measured_on_the_rotated_page(self):
+        """Longer than the unrotated page is wide, yet well short of the rotated page's width."""
+        @blank
+        def build(p):
+            p.insert_text((100, 700), "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi "
+                                      "omicron pi rho sigma tau upsilon phi chi", fontsize=14, rotate=90)
+            first, last = word(p, "alpha"), word(p, "chi")
+            self.assertGreater(first.y1 - last.y0, 0.85 * 600)
+            self.assertLess(first.y1 - last.y0, 0.85 * 800)
+            p.draw_line((101.5, first.y1), (101.5, last.y0), color=(0, 0, 0), width=0.8)
+            p.set_rotation(90)
+        self.assertEqual(self.only(build, size=(600, 800))["kind"], "underline")
+
+    def test_rotation_leaves_the_file_alone(self):
+        path = self.turned_page(90)
+        before = path.read_bytes()
+        self.marks(path)
+        self.assertEqual(path.read_bytes(), before)
+
     def test_cropped_page(self):
         def build(p):
             underline_at(p, "energy")

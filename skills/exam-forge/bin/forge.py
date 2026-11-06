@@ -778,9 +778,19 @@ THIN_LINE, TALL_BAR = 0.35, 1.9  # bar thickness over font size: a pen line, and
 MIN_FIT = 0.6  # share of a bar's length that must lie on letters
 PAGE_WIDE, PAGE_RULE, PAGE_MARGIN = 0.85, 0.4, 0.08  # of the page: ignored always, in a margin, the margin's depth
 THIN_POST, THIN_RULE, ROW_GAP = 2.5, 4, 4  # points, points, font sizes between joined rows
+IDENTITY = (1, 0, 0, 1, 0, 0)
 
 
-def page_lines(page):
+def turn(m, x, y):
+    return m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]
+
+
+def turn_box(m, box):
+    (x0, y0), (x1, y1) = turn(m, box[0], box[1]), turn(m, box[2], box[3])
+    return min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1)
+
+
+def page_lines(page, m):
     """Text lines with their real baseline, which is what a line's position is measured against."""
     lines = []
     for block in page.get_text("rawdict")["blocks"]:
@@ -789,9 +799,9 @@ def page_lines(page):
             if not spans:
                 continue
             main = max(spans, key=lambda s: len(s["chars"]))  # a superscript does not move the line
-            lines.append({"upright": line["dir"][0] > 0.99, "baseline": main["origin"][1], "size": main["size"],
-                          "top": line["bbox"][1], "bottom": line["bbox"][3],
-                          "chars": [(c["bbox"], c["c"]) for s in spans for c in s["chars"]]})
+            lines.append({"upright": m[0] * line["dir"][0] + m[2] * line["dir"][1] > 0.99,
+                          "baseline": turn(m, *main["origin"])[1], "size": main["size"],
+                          "chars": [(turn_box(m, c["bbox"]), c["c"]) for s in spans for c in s["chars"]]})
     return lines
 
 
@@ -799,21 +809,21 @@ def tidy(text):
     return " ".join(unicodedata.normalize("NFKC", text).split())  # a PDF's "fi" is often one ligature character
 
 
-def annotation_quads(annot):
+def annotation_quads(annot, m):
     points = annot.vertices or []
     quads = [points[i:i + 4] for i in range(0, len(points) - 3, 4)]
-    return [(min(p[0] for p in q), min(p[1] for p in q), max(p[0] for p in q), max(p[1] for p in q)) for q in quads] \
-        or [tuple(annot.rect)]
+    return [turn_box(m, (min(p[0] for p in q), min(p[1] for p in q), max(p[0] for p in q), max(p[1] for p in q)))
+            for q in quads] or [turn_box(m, tuple(annot.rect))]
 
 
-def annotation_marks(page, lines):
+def annotation_marks(page, lines, m):
     """Text comes from the quads: a rectangle around a two-line mark also holds what was not marked."""
     marks = []
     for annot in page.annots() or []:
         kind = ANNOTATION_MARKS.get(annot.type[1])
         if not kind:
             continue
-        quads = annotation_quads(annot)
+        quads = annotation_quads(annot, m)
         parts = ["".join(c for box, c in line["chars"]
                          if q[0] <= (box[0] + box[2]) / 2 <= q[2] and q[1] <= (box[1] + box[3]) / 2 <= q[3])
                  for q in quads for line in lines]
@@ -836,7 +846,7 @@ def is_marker(rgb, opacity):
     return max(rgb) - min(rgb) >= 0.08 and (opacity < 0.95 or (max(rgb) >= 0.8 and light >= 0.6))
 
 
-def page_shapes(page):
+def page_shapes(page, m):
     """Horizontal bars that may be marks, and the vertical rules that give a table away."""
     bars, posts = [], []
 
@@ -848,34 +858,34 @@ def page_shapes(page):
     def boxes(d):
         items = d["items"]
         if all(i[0] in ("re", "qu") for i in items):
-            return [i[1] if i[0] == "re" else i[1].rect for i in items]
-        return [d["rect"]]  # a rounded or hand-built shape counts as its outline
+            return [turn_box(m, tuple(i[1] if i[0] == "re" else i[1].rect)) for i in items]
+        return [turn_box(m, tuple(d["rect"]))]  # a rounded or hand-built shape counts as its outline
 
     for d in page.get_drawings():
         if d["type"] in ("f", "fs") and d.get("fill"):
             opacity = 1 if d.get("fill_opacity") is None else d["fill_opacity"]
-            for r in boxes(d):
-                if r.width <= THIN_POST and r.height > r.width:
-                    posts.append((r.x0, r.y0, r.y1))
+            for x0, y0, x1, y1 in boxes(d):
+                if x1 - x0 <= THIN_POST and y1 - y0 > x1 - x0:
+                    posts.append((x0, y0, y1))
                 else:
-                    add(r.x0, r.y0, r.x1, r.y1, d["fill"], opacity)
+                    add(x0, y0, x1, y1, d["fill"], opacity)
         if d["type"] in ("s", "fs") and d.get("color"):
             width = d.get("width") or 1
             opacity = 1 if d.get("stroke_opacity") is None else d["stroke_opacity"]
             for i in d["items"]:
                 if i[0] == "l":
-                    a, b = i[1], i[2]
-                    if abs(a.y - b.y) <= 2 < abs(a.x - b.x):
-                        mid = (a.y + b.y) / 2
-                        add(min(a.x, b.x), mid - width / 2, max(a.x, b.x), mid + width / 2, d["color"], opacity)
-                    elif abs(a.x - b.x) <= 2 < abs(a.y - b.y):
-                        posts.append((a.x, min(a.y, b.y), max(a.y, b.y)))
+                    (ax, ay), (bx, by) = turn(m, *i[1]), turn(m, *i[2])
+                    if abs(ay - by) <= 2 < abs(ax - bx):
+                        mid = (ay + by) / 2
+                        add(min(ax, bx), mid - width / 2, max(ax, bx), mid + width / 2, d["color"], opacity)
+                    elif abs(ax - bx) <= 2 < abs(ay - by):
+                        posts.append((ax, min(ay, by), max(ay, by)))
                 elif i[0] in ("re", "qu"):
-                    r = i[1] if i[0] == "re" else i[1].rect
-                    if r.height <= THIN_POST:
-                        add(r.x0, r.y0, r.x1, r.y1, d["color"], opacity)
+                    x0, y0, x1, y1 = turn_box(m, tuple(i[1] if i[0] == "re" else i[1].rect))
+                    if y1 - y0 <= THIN_POST:
+                        add(x0, y0, x1, y1, d["color"], opacity)
                     else:  # a frame: its sides show it is a cell, so its bottom edge is no underline
-                        posts += [(r.x0, r.y0, r.y1), (r.x1, r.y0, r.y1)]
+                        posts += [(x0, y0, y1), (x1, y0, y1)]
     return bars, posts
 
 
@@ -961,12 +971,9 @@ def join_across_rows(found, lines):
                       max(m["x1"] for m in c), max(m["bottom"] for m in c)]} for c in chains]
 
 
-def drawn_marks(page, lines):
-    width, height = page.rect.width, page.rect.height
-    if page.rotation % 180:
-        width, height = height, width
-    bars, posts = page_shapes(page)
-    links = [link["from"] for link in page.get_links()]
+def drawn_marks(page, lines, m, width, height):
+    bars, posts = page_shapes(page, m)
+    links = [turn_box(m, tuple(link["from"])) for link in page.get_links()]
     found = []
     for bar in bars:
         length, mid = bar["x1"] - bar["x0"], (bar["y0"] + bar["y1"]) / 2
@@ -977,25 +984,40 @@ def drawn_marks(page, lines):
                 continue  # a header or footer rule
             if any(bar["x0"] - 2 <= x <= bar["x1"] + 2 and top - 1.5 <= mid <= bottom + 1.5 for x, top, bottom in posts):
                 continue  # meets a vertical rule: a table
-        m = read_bar(bar, lines)
-        if not m:
+        mark = read_bar(bar, lines)
+        if not mark:
             continue
-        center = (m["x0"] + m["x1"]) / 2
-        if m["kind"] == "underline" and any(r.x0 <= center <= r.x1 and r.y0 <= m["baseline"] <= r.y1 for r in links):
+        center = (mark["x0"] + mark["x1"]) / 2
+        if mark["kind"] == "underline" and any(r[0] <= center <= r[2] and r[1] <= mark["baseline"] <= r[3] for r in links):
             continue  # how a hyperlink looks, nobody's emphasis
-        found.append(m)
+        found.append(mark)
     return join_across_rows(join_on_rows(found), lines)
 
 
+def upright_chars(lines):
+    return sum(len(line["chars"]) for line in lines if line["upright"])
+
+
+def reading_frame(page):
+    """A page turned by /Rotate reports text, annotations and drawings in ways that differ between pymupdf
+    releases. So read it all unrotated, here in memory only, then turn it the one way the text reads upright.
+    Returns the matrix and the page's size in that frame."""
+    rotated, m, size = page.rotation, tuple(page.rotation_matrix), (page.rect.width, page.rect.height)
+    page.set_rotation(0)
+    if rotated and upright_chars(page_lines(page, IDENTITY)) <= upright_chars(page_lines(page, m)):
+        return (m, *size)
+    return (IDENTITY, page.rect.width, page.rect.height)
+
+
 def page_marks(page, number):
-    lines = page_lines(page)
-    found = annotation_marks(page, lines)
+    m, width, height = reading_frame(page)
+    found = annotation_marks(page, page_lines(page, m), m)
     drop_annotations(page)
-    found += drawn_marks(page, page_lines(page))
+    found += drawn_marks(page, page_lines(page, m), m, width, height)
     found.sort(key=lambda m: (round((m["bbox"][1] + m["bbox"][3]) / 16), m["bbox"][0]))
-    return [{"id": f"mark-p{number}-{n}", "page": number, "kind": m["kind"], "role": MARK_ROLES[m["kind"]],
-             "origin": m["origin"], "text": m["text"], "bbox": [round(x, 1) for x in m["bbox"]]}
-            for n, m in enumerate(found, 1)]
+    return [{"id": f"mark-p{number}-{n}", "page": number, "kind": f["kind"], "role": MARK_ROLES[f["kind"]],
+             "origin": f["origin"], "text": f["text"], "bbox": [round(x, 1) for x in f["bbox"]]}
+            for n, f in enumerate(found, 1)]
 
 
 def is_scanned(page):
