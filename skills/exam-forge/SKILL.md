@@ -28,7 +28,7 @@ Do this first, every time. The first of `python3`, `python`, `py -3` that prints
 ```bash
 python3 --version || python --version || py -3 --version
 ```
-If none does, nothing else here can run, so ask in the chat with AskUserQuestion whether to install Python. On yes, run the line for this system, then look for `PY` again: macOS `brew install python` (no Homebrew: send them to python.org), Windows `winget install -e --id Python.Python.3.12`, Linux `sudo apt-get install -y python3`. On no, stop and say the job needs Python.
+If none does, nothing else here can run, so ask in the chat with AskUserQuestion whether to install Python. On yes, run the line for this system, then look for `PY` again: macOS `brew install python` (no Homebrew: send them to python.org), Windows `winget install -e --id Python.Python.3.12 --accept-source-agreements --accept-package-agreements`, Debian or Ubuntu `sudo apt-get install -y python3` (other Linux: the system's package manager). On no, stop and say the job needs Python.
 
 Then check the rest:
 ```bash
@@ -46,7 +46,7 @@ Extract PDF paths and notes from the arguments and attachments.
 ```bash
 $PY "$FORGE" intake open --pdf "<pdf1>" --pdf "<pdf2>" --notes "<notes>"
 ```
-Leave out `--pdf` and `--notes` when you have none: the user adds files or folders in the form. `--pdf` also takes a folder the user named. It starts the Studio, opens the browser and prints `{"url": ...}`. Give the user that URL in one line. Then start the wait with the Bash tool's `run_in_background: true`, and end your turn without polling:
+Leave out `--pdf` and `--notes` when you have none: the user adds files or folders in the form. `--pdf` also takes a folder the user named. It starts the Studio, opens the browser and prints `{"url": ..., "skipped": [...]}`; tell the user about any file in `skipped`, which was left out because it is not a readable PDF. Give the user that URL in one line. Then start the wait with the Bash tool's `run_in_background: true`, and end your turn without polling:
 ```bash
 $PY "$FORGE" intake wait
 ```
@@ -106,7 +106,7 @@ For failures from any layer:
 ```bash
 $PY "$FORGE" ask "<run>" --id "<unique-id>" --text "<question in the user's language>" --option "drop=Drop it" --option "continue=Keep trying"
 ```
-It prints the chosen value and exits 0; exit 4 means nobody answered in time, so ask in the chat. Never put question text in `--text`: the Studio does not show questions. Refer to them by chunk and count.
+It starts the Studio if it has closed, prints the chosen value and exits 0. Exit 4 means nobody answered in time and exit 2 that the Studio could not start; either way, ask in the chat. Never put question text in `--text`: the Studio does not show questions. Refer to them by chunk and count.
 
 Chunks may be at different stages. On each notification, take only that chunk's next step. Tell the user the chunk and round in a short status line.
 

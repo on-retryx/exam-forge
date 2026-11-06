@@ -6,12 +6,12 @@ argument-hint: "[list | get KEY | set KEY VALUE | reset [KEY]]"
 
 # Exam Forge settings
 
-Helper: `${CLAUDE_SKILL_DIR}/../exam-forge/bin/forge.py`. Call it with an absolute path.
+Helper: `${CLAUDE_SKILL_DIR}/../exam-forge/bin/forge.py`. Call it with an absolute path. `PY` is the first of `python3`, `python`, `py -3` that prints a Python 3 version. If none does, ask before installing Python as `/exam-forge:exam-forge` does.
 
-- See everything: `python3 "$FORGE" config list`
-- Read one: `python3 "$FORGE" config get KEY`
-- Change one: `python3 "$FORGE" config set KEY VALUE`
-- Back to default: `python3 "$FORGE" config reset KEY` (without KEY, resets all; confirm with the user first)
+- See everything: `$PY "$FORGE" config list`
+- Read one: `$PY "$FORGE" config get KEY`
+- Change one: `$PY "$FORGE" config set KEY VALUE`
+- Back to default: `$PY "$FORGE" config reset KEY` (without KEY, resets all; confirm with the user first)
 
 Turn plain requests into these commands. "Put answers under the questions" is `set answer_placement inline`; "use the cheap team" is `set quality_preset economy`. For allowed values run `config list --json` and read the `schema` section. Value formats: booleans `true`/`false`, `difficulty_mix` as `0.25,0.40,0.35`, `short_pdf_question_options` as `10,15`.
 

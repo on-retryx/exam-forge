@@ -10,6 +10,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import conftest  # noqa: F401
+
 ROOT = Path(__file__).resolve().parent.parent
 FORGE = ROOT / "skills" / "exam-forge" / "bin" / "forge.py"
 
