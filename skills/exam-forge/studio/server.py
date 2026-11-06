@@ -20,6 +20,7 @@ from urllib.parse import parse_qs, urlparse
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "bin"))
+import app_icon  # noqa: E402
 import forge  # noqa: E402
 
 STATIC = {
@@ -149,7 +150,15 @@ class Handler(BaseHTTPRequestHandler):
         url = urlparse(self.path)
         q = parse_qs(url.query)
         wanted = q.get("run", [""])[0]
-        if url.path in STATIC:
+        if url.path == "/icon.png":
+            data = app_icon.png(128)
+            self.send_response(200)
+            self.send_header("Content-Type", "image/png")
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "max-age=86400")
+            self.end_headers()
+            self.wfile.write(data)
+        elif url.path in STATIC:
             name, ctype = STATIC[url.path]
             data = (HERE / name).read_bytes()
             if name == "index.html":

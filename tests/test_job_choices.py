@@ -1,7 +1,9 @@
 """Requirements, estimates, the budget solver and per-job choices."""
 import json
 import os
+import plistlib
 import stat
+import struct
 import subprocess
 import sys
 import tempfile
@@ -166,7 +168,7 @@ class Doctor(Base):
 
 class Window(Base):
     def test_opens_an_app_window_with_its_own_profile(self):
-        with mock.patch.object(forge, "find_browser", return_value="/x/brave"), \
+        with mock.patch.object(forge.sys, "platform", "linux"), mock.patch.object(forge, "find_browser", return_value="/x/brave"), \
                 mock.patch.object(forge.subprocess, "Popen") as popen, mock.patch.object(forge.webbrowser, "open") as tab:
             forge.open_window("http://127.0.0.1:1/?tab=job")
         args = popen.call_args[0][0]
@@ -174,15 +176,42 @@ class Window(Base):
         self.assertIn(f"--user-data-dir={forge.config_dir() / 'profile'}", args)
         tab.assert_not_called()
 
-    def test_a_mac_app_goes_through_open_so_it_comes_to_the_front(self):
-        browser = "/Applications/Chrome.app/Contents/MacOS/Chrome"
-        with mock.patch.object(forge, "find_browser", return_value=browser), mock.patch.object(forge.sys, "platform", "darwin"), \
+    def test_a_mac_opens_our_own_app(self):
+        with mock.patch.object(forge.sys, "platform", "darwin"), \
+                mock.patch.object(forge, "mac_app", return_value=Path("/x/Exam Forge.app")), \
                 mock.patch.object(forge.subprocess, "Popen") as popen:
             forge.open_window("http://x")
-        self.assertEqual(popen.call_args[0][0][:5], ["open", "-n", "-a", "/Applications/Chrome.app", "--args"])
+        self.assertEqual(popen.call_args[0][0], ["open", "-a", "/x/Exam Forge.app"])
+
+    def test_a_mac_without_the_app_tools_still_gets_a_window(self):
+        with mock.patch.object(forge.sys, "platform", "darwin"), mock.patch.object(forge, "find_browser", return_value="/x/chrome"), \
+                mock.patch.object(forge, "mac_app", side_effect=OSError("no osacompile")), \
+                mock.patch.object(forge.subprocess, "Popen") as popen:
+            forge.open_window("http://x")
+        self.assertEqual(popen.call_args[0][0][:2], ["/x/chrome", "--app=http://x"])
+
+    @unittest.skipUnless(sys.platform == "darwin", "Mac only")
+    def test_mac_app_has_our_identity_and_icon_and_is_built_once(self):
+        bundle = forge.mac_app()
+        info = plistlib.loads((bundle / "Contents" / "Info.plist").read_bytes())
+        self.assertEqual(info["CFBundleIdentifier"], "co.retryx.examforge")
+        icon = bundle / "Contents" / "Resources" / "applet.icns"
+        self.assertGreater(icon.stat().st_size, 1000)
+        self.assertNotIn("CFBundleIconName", info)  # else macOS shows the default script icon
+        self.assertFalse((bundle / "Contents" / "Resources" / "Assets.car").exists())
+        self.assertEqual(subprocess.run(["codesign", "--verify", str(bundle)], capture_output=True).returncode, 0)
+        built = icon.stat().st_mtime_ns
+        forge.mac_app()
+        self.assertEqual(icon.stat().st_mtime_ns, built)
+
+    def test_icon_is_a_valid_png(self):
+        data = forge.app_icon.png(64)
+        self.assertEqual(data[:8], b"\x89PNG\r\n\x1a\n")
+        self.assertEqual(struct.unpack(">II", data[16:24]), (64, 64))
 
     def test_falls_back_to_a_tab(self):
-        with mock.patch.object(forge, "find_browser", return_value=None), mock.patch.object(forge.webbrowser, "open") as tab:
+        with mock.patch.object(forge.sys, "platform", "linux"), mock.patch.object(forge, "find_browser", return_value=None), \
+                mock.patch.object(forge.webbrowser, "open") as tab:
             forge.open_window("http://x")
         tab.assert_called_once()
 

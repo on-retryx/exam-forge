@@ -127,7 +127,7 @@ Long PDFs can use a real share of a Claude Pro session. `/exam-forge:exam-forge`
 
 ## Studio
 
-The Studio opens in a window of its own when a job starts, with a start screen that checks your setup. Without a Chromium browser it opens as a tab (`studio_window` = `false` does the same). It is a pixel-art office drawn entirely in code, including its own font, with no image files, downloads or external services, and it runs only on your computer.
+The Studio opens in a window of its own when a job starts, with a start screen that checks your setup. Without a Chromium browser it opens as a tab (`studio_window` = `false` does the same). On a Mac it is a small Exam Forge app in `~/Applications` with its own pixel-art icon in the Dock. Keep it in the Dock to open the Studio with a click. It is a pixel-art office drawn entirely in code, including its own font, with no image files, downloads or external services, and it runs only on your computer.
 
 - The team grows with the job: hopping pixel bots in different shapes for each editor and reviewer, a screener, and a crowned chief editor in a glass office, all at desks with their own PCs
 - Bots carry pages between desks, PASS and FAIL stamps appear, and speech bubbles show what each bot is doing (`studio_speech_bubbles` turns them off)

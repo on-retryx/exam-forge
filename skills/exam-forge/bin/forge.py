@@ -29,6 +29,7 @@ Commands:
   doctor [--json] [--install ID]        Check what a job needs; install one item
   models [--probe]                      Which model families this account can use
   studio [--port N] [--no-open]         Start the local office view
+  studio-url                            Start the Studio if needed and print its address
   intake open [--pdf P ...] [--notes T]  Open the job form in the Studio
   intake wait [--timeout S]             Wait for a job from the form (exit 4 timeout, 5 cancelled)
   ask <run> --id I --text T --option v=Label ...  Ask in the Studio; prints the value
@@ -42,11 +43,14 @@ import glob
 import html
 import importlib
 from itertools import product
+import hashlib
 import json
 import math
 import os
+import plistlib
 import random
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -55,6 +59,8 @@ import time
 import urllib.request
 import webbrowser
 from pathlib import Path
+
+import app_icon  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 TEMPLATES = ROOT / "templates"
@@ -522,20 +528,109 @@ def cmd_doctor(a):
     sys.exit(0 if d["ok"] else 1)
 
 
+MAC_APP = """
+ObjC.import('Cocoa');
+ObjC.import('WebKit');
+var win, view, closer, links;
+function run() {
+  var app = Application.currentApplication();
+  app.includeStandardAdditions = true;
+  var url;
+  try { url = app.doShellScript(COMMAND); } catch (e) { app.displayAlert('Exam Forge', { message: String(e) }); $.NSApp.terminate(null); return; }
+  ObjC.registerSubclass({
+    name: 'ForgeCloser', protocols: ['NSWindowDelegate'],
+    methods: { 'windowWillClose:': { types: ['void', ['id']], implementation: function () { $.NSApp.terminate(null); } } },
+  });
+  ObjC.registerSubclass({
+    name: 'ForgeLinks', protocols: ['WKUIDelegate'],
+    methods: {
+      'webView:createWebViewWithConfiguration:forNavigationAction:windowFeatures:': {
+        types: ['id', ['id', 'id', 'id', 'id']],
+        implementation: function (web, configuration, action) { $.NSWorkspace.sharedWorkspace.openURL(action.request.URL); return $(); },
+      },
+    },
+  });
+  closer = $.ForgeCloser.alloc.init;
+  links = $.ForgeLinks.alloc.init;
+  win = $.NSWindow.alloc.initWithContentRectStyleMaskBackingDefer($.NSMakeRect(0, 0, 1280, 860), 15, 2, false);
+  win.title = 'Exam Forge';
+  win.releasedWhenClosed = false;
+  win.delegate = closer;
+  view = $.WKWebView.alloc.initWithFrameConfiguration($.NSMakeRect(0, 0, 1280, 860), $.WKWebViewConfiguration.alloc.init);
+  view.autoresizingMask = 18;
+  view.UIDelegate = links;
+  win.contentView = view;
+  view.loadRequest($.NSURLRequest.requestWithURL($.NSURL.URLWithString(url)));
+  win.center;
+  win.makeKeyAndOrderFront(null);
+  $.NSApp.activateIgnoringOtherApps(true);
+}
+"""
+
+
+def mac_app():
+    """A real Mac app holding a web view, so the Dock shows our icon.
+
+    A browser started in app mode always keeps the browser's own icon. osacompile comes
+    with macOS, so this needs no Xcode. Clicked in the Dock, the app starts the Studio itself.
+    """
+    bundle = Path.home() / "Applications" / "Exam Forge.app"
+    command = f"{shlex.quote(sys.executable)} {shlex.quote(str(Path(__file__).resolve()))} studio-url"
+    source = MAC_APP.replace("COMMAND", json.dumps(command))
+    stamp = bundle / "Contents" / "Resources" / "exam-forge.js"
+    source += f"// icon {hashlib.sha256(app_icon.png(128)).hexdigest()}\n"  # a new icon rebuilds the app too
+    if stamp.is_file() and stamp.read_text(encoding="utf-8") == source:
+        return bundle
+    with tempfile.TemporaryDirectory() as td:
+        script, iconset = Path(td) / "app.js", Path(td) / "icon.iconset"
+        script.write_text(source, encoding="utf-8")
+        iconset.mkdir()
+        for size in (16, 32, 128, 256, 512):
+            (iconset / f"icon_{size}x{size}.png").write_bytes(app_icon.png(size))
+            (iconset / f"icon_{size}x{size}@2x.png").write_bytes(app_icon.png(size * 2))
+        bundle.parent.mkdir(exist_ok=True)
+        shutil.rmtree(bundle, ignore_errors=True)
+        subprocess.run(["osacompile", "-l", "JavaScript", "-s", "-o", str(bundle), str(script)], check=True, capture_output=True, timeout=60)
+        subprocess.run(["iconutil", "-c", "icns", str(iconset), "-o", str(bundle / "Contents" / "Resources" / "applet.icns")],
+                       check=True, capture_output=True, timeout=30)
+    # osacompile also ships a catalog holding the default script icon, and macOS prefers it to the .icns.
+    (bundle / "Contents" / "Resources" / "Assets.car").unlink(missing_ok=True)
+    info = bundle / "Contents" / "Info.plist"
+    plist = plistlib.loads(info.read_bytes())
+    plist.pop("CFBundleIconName", None)
+    plist.update(CFBundleIdentifier="co.retryx.examforge", CFBundleName="Exam Forge",
+                 NSAppTransportSecurity={"NSAllowsLocalNetworking": True, "NSAllowsArbitraryLoads": True})
+    info.write_bytes(plistlib.dumps(plist))
+    stamp.write_text(source, encoding="utf-8")
+    subprocess.run(["codesign", "-f", "-s", "-", "--deep", str(bundle)], check=True, capture_output=True, timeout=60)
+    return bundle
+
+
+def window_flags():
+    return [f"--user-data-dir={config_dir() / 'profile'}", "--no-first-run", "--no-default-browser-check",
+            "--window-size=1280,860"]
+
+
 def open_window(url):
     """Open the Studio in a window of its own. A plain browser tab when that is not possible."""
-    browser = find_browser(printing=False) if (S or load_settings())["studio_window"] else None
+    if not (S or load_settings())["studio_window"]:
+        webbrowser.open(url)
+        return
+    if sys.platform == "darwin":
+        try:
+            subprocess.Popen(["open", "-a", str(mac_app())], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, start_new_session=True)
+            return
+        except (OSError, subprocess.SubprocessError):
+            pass  # an old macOS or a blocked tool: the browser window below still works
+    browser = find_browser(printing=False)
     if browser:
         try:
-            flags = [f"--app={url}", f"--user-data-dir={config_dir() / 'profile'}", "--no-first-run",
-                     "--no-default-browser-check", "--window-size=1280,860"]
-            # On a Mac only LaunchServices brings a new window to the front.
-            bundle = browser.split(".app/Contents/MacOS/")[0] + ".app" if sys.platform == "darwin" and ".app/Contents/MacOS/" in browser else ""
-            subprocess.Popen(["open", "-n", "-a", bundle, "--args", *flags] if bundle else [browser, *flags],
+            subprocess.Popen([browser, f"--app={url}", *window_flags()],
                              stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                              start_new_session=True)
             return
-        except OSError:
+        except (OSError, subprocess.SubprocessError):
             pass
     webbrowser.open(url)
 
@@ -1898,6 +1993,7 @@ def main():
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("doctor"); p.add_argument("--json", action="store_true"); p.add_argument("--install")
     p.set_defaults(f=cmd_doctor)
+    p = sub.add_parser("studio-url"); p.set_defaults(f=lambda a: print(ensure_studio() + "/?tab=job"))
     p = sub.add_parser("settings")
     p.set_defaults(f=lambda a: print(json.dumps(S, ensure_ascii=False, indent=2)))
     p = sub.add_parser("config")

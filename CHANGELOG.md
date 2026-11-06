@@ -18,6 +18,7 @@
 - With the form on, the skill no longer asks setup questions in the chat
 - A Studio left running by another version is no longer reused
 - The Studio opens in a window of its own when a Chromium browser is installed (`studio_window`), and a new `/exam-forge` reuses a window that is already open
+- On a Mac the Studio is a small Exam Forge app in `~/Applications`, built on the spot with tools macOS already has, with its own pixel-art icon in the Dock. It can be kept in the Dock and starts the Studio when clicked. Printing still uses a browser
 - Files can be dropped anywhere in the Studio window, including over an open dialog. They used to vanish without a message outside the form
 - Brave opens the Studio window. Printing still needs Chrome, Chromium or Edge, because headless Brave did not write the PDF in testing
 - A browser that hangs while printing now leaves the book as HTML instead of stopping with an error
