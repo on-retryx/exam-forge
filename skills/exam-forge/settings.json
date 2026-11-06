@@ -15,6 +15,7 @@
   "chunk_pages": 20,
   "thin_page_floor": 0.6,
   "mcq_options": 5,
+  "handwritten_notes": true,
   "quality_preset": "quality",
   "screener_enabled": true,
   "chief_sample_rate": 0.25,
