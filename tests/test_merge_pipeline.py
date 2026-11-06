@@ -70,7 +70,7 @@ class Pipeline(unittest.TestCase):
         review.write_text(json.dumps({"results": [{"id": q["id"], "status": "PASS"} for q in questions]}), encoding="utf-8")
         self.ok("approve", chunk, review)
         out = self.d / "run" / "book.json"
-        self.ok("merge", self.run_dir, "--out", out, "--title", "Cells", "--format", "open")
+        self.ok("merge", self.run_dir, "--out", out, "--title", "Cells", "--format", "open", "--language", "en")
         book = json.loads(out.read_text(encoding="utf-8"))
         forge.S = forge.load_settings()
         return book, forge.build_book_html(book, forge.S["answer_placement"])
