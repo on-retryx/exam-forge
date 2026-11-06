@@ -318,6 +318,8 @@ FORMATS = {
     "full-mix": {"open", "blank", "true_false", "mcq"},
 }
 TYPES = ["mcq", "open", "blank", "true_false"]
+SOURCE_KINDS = ["text", "figure", "handwriting"]
+NOTE_ID = r"note-p([1-9]\d*)-[1-9]\d*"
 LETTERS = ["A", "B", "C", "D", "E"]
 OPTION_SETS = {4: LETTERS[:4], 5: LETTERS}
 SOURCE_REFERENCES = {
@@ -330,6 +332,7 @@ SOURCE_REFERENCES = {
         r"\b(given|stated|mentioned|shown|listed|described) (above|in the)\b",
         r"\b(value|figure|number|amount) (given|stated|listed) for\b",
         r"\bthe (above|preceding) (text|table|figure|section)\b",
+        r"\bhand-?written (notes?|comments?|remarks?|annotations?)\b", r"\b(margin|marginal|sticky) notes?\b",
     ],
     "tr": [
         r"slayt", r"sunum(da|a|un)", r"\bnotlar(da|a|ın)", r"ders not",
@@ -337,6 +340,7 @@ SOURCE_REFERENCES = {
         r"yukarıdaki (metin|kaynak|bölüm)", r"bu bölümde", r"bölümüne göre", r"dokümanda",
         r"belgede", r"sayfa \d", r"\bs\. ?\d", r"yazara göre", r"tabloya göre", r"şekle göre",
         r"görselde", r"için verilen", r"yukarıda verilen", r"için belirtilen", r"yukarıda belirtilen",
+        r"el yazısı(yla)? not", r"kenar not",
     ],
 }
 BROWSER_CANDIDATES = [
@@ -360,6 +364,7 @@ LABELS = {
         "mcq": "Multiple choice", "open": "Open-ended", "blank": "Fill in the blank",
         "true_false": "True / False", "fmt_mcq": "Multiple choice", "fmt_open": "Open-ended",
         "fmt_mixed": "Mixed", "fmt_full-mix": "Full mix",
+        "handwritten_note": "handwritten note",
         "guide_book_end": "Answers are at the end of the book, with a short explanation and the source of each one.",
         "guide_inline": "Each answer sits directly under its question, with a short explanation and its source.",
         "guide_section_end": "Each section ends with its answer key, with a short explanation and the source of each answer.",
@@ -375,6 +380,7 @@ LABELS = {
         "mcq": "Çoktan seçmeli", "open": "Açık uçlu", "blank": "Boşluk doldurma",
         "true_false": "Doğru / Yanlış", "fmt_mcq": "Çoktan seçmeli", "fmt_open": "Açık uçlu",
         "fmt_mixed": "Karma", "fmt_full-mix": "Tam karma",
+        "handwritten_note": "el yazısı not",
         "guide_book_end": "Cevaplar kitabın sonundadır; her cevapta kısa açıklama ve kaynak yer alır.",
         "guide_inline": "Her cevap kendi sorusunun hemen altındadır; kısa açıklama ve kaynakla birlikte.",
         "guide_section_end": "Her bölüm kendi cevap anahtarıyla biter; her cevapta kısa açıklama ve kaynak yer alır.",
@@ -980,6 +986,32 @@ def source_reference(text):
     return None
 
 
+def rests_on_note(q):
+    src = q.get("source")
+    return isinstance(src, dict) and src.get("kind") == "handwriting"
+
+
+def note_errors(q):
+    """The source fields of a question that may rest on a handwritten note."""
+    src, qid = q.get("source"), q.get("id", "?")
+    if not isinstance(src, dict):
+        return []
+    e = []
+    if src.get("kind", "text") not in SOURCE_KINDS:
+        e.append(f"{qid}: source.kind must be one of {SOURCE_KINDS}")
+    if rests_on_note(q) and not str(q.get("quote") or "").strip():
+        e.append(f"{qid}: a handwriting question needs the exact transcription in 'quote'")
+    if "note" in src:
+        m = re.fullmatch(NOTE_ID, src["note"]) if isinstance(src["note"], str) else None
+        if not m:
+            e.append(f"{qid}: source.note must look like note-p12-1")
+        elif not rests_on_note(q):
+            e.append(f"{qid}: source.note belongs on a question with source.kind 'handwriting'")
+        elif int(m.group(1)) != src.get("page"):
+            e.append(f"{qid}: source.note {src['note']} is not on page {src.get('page')}")
+    return e
+
+
 def question_errors(q, fmt=None, page_range=None, mcq_options=None):
     e = []
     qid = q.get("id", "?")
@@ -1018,7 +1050,7 @@ def question_errors(q, fmt=None, page_range=None, mcq_options=None):
         e.append(f"{qid}: source must be {{pdf, section, page(int)}}")
     elif page_range and not (page_range[0] <= src["page"] <= page_range[1]):
         e.append(f"{qid}: source page {src['page']} is outside chunk range {page_range}")
-    return e
+    return e + note_errors(q)
 
 
 def parse_split(text):
@@ -1293,8 +1325,9 @@ def answer_text(q, L):
 
 def source_line(q, L):
     s = q["source"]
-    return (f'{L["source"]}: {esc(s["pdf"])} · {L["section"]}: {esc(s["section"])} · '
+    line = (f'{L["source"]}: {esc(s["pdf"])} · {L["section"]}: {esc(s["section"])} · '
             f'{L["page"]} {esc(s["page"])}')
+    return f'{line} · {L["handwritten_note"]}' if rests_on_note(q) else line
 
 
 def question_html(no, q, L, inline):
