@@ -599,8 +599,8 @@ class Command(Case):
         @blank
         def build(p):
             p.insert_text((100, 700), "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi "
-                                      "omicron pi rho sigma tau upsilon phi chi", fontsize=14, rotate=90)
-            first, last = word(p, "alpha"), word(p, "chi")
+                                      "omicron pi rho sigma tau", fontsize=14, rotate=90)
+            first, last = word(p, "alpha"), word(p, "tau")
             self.assertGreater(first.y1 - last.y0, 0.85 * 600)
             self.assertLess(first.y1 - last.y0, 0.85 * 800)
             p.draw_line((101.5, first.y1), (101.5, last.y0), color=(0, 0, 0), width=0.8)
