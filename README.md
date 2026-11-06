@@ -45,6 +45,7 @@ AI can write exam questions quickly. The hard part is trusting them. A model can
 - **Difficulty:** easy 25%, medium 40%, hard 35% (adjustable)
 - **Answers where you want them:** at the end of the book, under each question, or at the end of each section
 - **Several PDFs:** one book per PDF, or a single merged book with a cover for each part, named after the file or with a logical title
+- **Questions from figures:** a graph, chart, diagram or labelled shape in your PDF can become a question, printed with the cropped figure (needs pymupdf)
 - **Any language:** questions follow the language of your PDF. Book labels come in English and Turkish.
 - **A live Studio:** a local animated office with the team at their desks, progress, reasons for rejections and estimated cost
 
@@ -285,6 +286,7 @@ They are stored in `~/.config/exam-forge/settings.json`.
 | `output_dir` | empty | Empty means next to the first PDF |
 | `field` | empty | Exam style, such as medicine or law |
 | `mcq_options` | 5 | Options per question: 4 or 5 |
+| `figure_questions` | true | Editors may write questions from figures, and the book prints them |
 | `difficulty_mix` | 0.25 / 0.40 / 0.35 | Easy, medium, hard; sums to 1 |
 | `short_pdf_pages` | 20 | Below this, use fixed question counts |
 | `short_pdf_question_options` | 10, 15 | Counts the editor can pick on short PDFs |
@@ -307,7 +309,7 @@ They are stored in `~/.config/exam-forge/settings.json`.
 - Exam Forge reads only the files you give it. It does not search the web or use other sources.
 - The Studio's file browser runs only on this computer and shows only folders and PDF names. It opens a file only when you add it. Dropped files are copied to `~/Exam Forge/`; delete them whenever you like.
 - Your questions stay yours. The run folder sits next to your book, and nothing is copied elsewhere. Your PDFs are processed by Claude as usual in Claude Code.
-- Use only material you have the right to use. Questions include short quotes from the source.
+- Use only material you have the right to use. Questions include short quotes from the source, and books reproduce figures from it, so you need the right to use those figures as well. Turn this off with `figure_questions`.
 - The review catches most errors, but it is still AI. Use the book to study. Have a person check it before using it as an official exam.
 
 ## Development
@@ -328,4 +330,4 @@ New features use a score ratchet, [`tools/ratchet.py`](tools/ratchet.py). Tests 
 
 ## Türkçe özet
 
-**Exam Forge**, ders notu PDF'lerinden yazdırılabilir soru kitabı üreten bir Claude Code eklentisidir. Her soru kaynak sayfa ve birebir alıntı taşır. Ayrı bir reviewer sayfaları kendisi açıp denetler, doğrulanmamış soru kitaba giremez. Sorular PDF'in dilinde yazılır; Türkçe kaynak Türkçe soru verir. Kitap etiketleri ve Studio arayüzü Türkçe de kullanılabilir. Cevaplar kitabın sonuna, sorunun altına ya da bölüm sonuna konabilir. Birden çok PDF tek kitapta birleştirilebilir. `/exam-forge:exam-forge` Studio'da bir iş formu açar; dosya ya da klasör ekleme (gezinerek veya sürükle bırakla), ayarlar ve işin takibi tarayıcıdan yapılır, Claude Code oturumu ise açık kalır. Tüm ayarlar Studio'dan ya da `/exam-forge:config` ile değişir. Kurulum: `/plugin install exam-forge --marketplace on-retryx/exam-forge`. Güncellemeden sonra Claude Code'u yeniden başlatın; güncelleme ancak o zaman geçerli olur.
+**Exam Forge**, ders notu PDF'lerinden yazdırılabilir soru kitabı üreten bir Claude Code eklentisidir. Her soru kaynak sayfa ve birebir alıntı taşır. Ayrı bir reviewer sayfaları kendisi açıp denetler, doğrulanmamış soru kitaba giremez. Sorular PDF'in dilinde yazılır; Türkçe kaynak Türkçe soru verir. Kitap etiketleri ve Studio arayüzü Türkçe de kullanılabilir. PDF'teki grafik, şema ve şekillerden de soru yazılabilir; kitap şekli sorunun yanında basar, bu yüzden o şekilleri kullanma hakkınız olmalıdır (`figure_questions` ile kapatılabilir). Cevaplar kitabın sonuna, sorunun altına ya da bölüm sonuna konabilir. Birden çok PDF tek kitapta birleştirilebilir. `/exam-forge:exam-forge` Studio'da bir iş formu açar; dosya ya da klasör ekleme (gezinerek veya sürükle bırakla), ayarlar ve işin takibi tarayıcıdan yapılır, Claude Code oturumu ise açık kalır. Tüm ayarlar Studio'dan ya da `/exam-forge:config` ile değişir. Kurulum: `/plugin install exam-forge --marketplace on-retryx/exam-forge`. Güncellemeden sonra Claude Code'u yeniden başlatın; güncelleme ancak o zaman geçerli olur.

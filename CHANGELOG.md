@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Added
+- Questions from figures: editors can use a graph, chart, diagram or labelled shape from the PDF, and the book prints the crop with the question. New command `forge.py figures`, question field `figure`, `source.kind` value `figure` and setting `figure_questions`. The reviewer opens the crop, and a missing or damaged file stops the print
 - `tools/ratchet.py`: a score ratchet for feature work. Tests come first, a better score is pushed, a worse one is undone, and a gate checks every test around a merge
 
 ## [0.3.1] - 2026-11-06

@@ -321,6 +321,27 @@ class FigureFinder(Base):
         expected = fitz.Rect(80, 80, 380, 280) * fitz.Matrix(0, 1, -1, 0, 842, 0)
         self.assertTrue(fitz.Rect(fig["bbox"]).intersects(expected))
 
+    def test_every_rotation_crops_the_same_figure(self):
+        """Drawings and words come back unrotated, while the crop is cut from the page as it is shown."""
+        def page_at(angle):
+            def draw(page):
+                self.chart(page, x=80, y=80)
+                page.set_rotation(angle)
+            return draw
+
+        for angle in (90, 180, 270):
+            pdf = self.pdf(page_at(angle), name=f"turned-{angle}.pdf")
+            [fig] = self.figures(pdf, out=f"run/turned-{angle}/figures")
+            with fitz.open(str(pdf)) as doc:
+                page = doc[0]
+                chart = fitz.Rect(80, 80, 380, 280) * page.rotation_matrix
+                self.assertTrue(fitz.Rect(fig["bbox"]).contains(chart), angle)
+                self.assertTrue(page.rect.contains(fitz.Rect(fig["bbox"])), angle)
+                whole = page.get_pixmap(dpi=150, clip=fitz.Rect(fig["bbox"]))
+            crop = fitz.Pixmap(fig["path"])
+            self.assertEqual((crop.width, crop.height), (whole.width, whole.height), angle)
+            self.assertEqual(crop.samples, whole.samples, angle)
+
     def test_bad_ranges_stop_with_a_message(self):
         pdf = self.pdf(self.picture)
         for bad in ("x", "0-3", "5-2", "1-"):
