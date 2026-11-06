@@ -73,7 +73,7 @@ class Pipeline(unittest.TestCase):
         self.ok("merge", self.run_dir, "--out", out, "--title", "Cells", "--format", "open", "--language", "en")
         book = json.loads(out.read_text(encoding="utf-8"))
         forge.S = forge.load_settings()
-        return book, forge.build_book_html(book, forge.S["answer_placement"])
+        return book, forge.build_book_html(book, forge.S["answer_placement"])[0]
 
     def test_notes_reach_the_book(self):
         listing = json.loads(self.ok("notes", self.pdf, "1-1", "--out", self.run_dir / "notes").stdout)
@@ -81,6 +81,7 @@ class Pipeline(unittest.TestCase):
         hand = question(2, quote="ATP is made here", kind="handwriting", note=note["id"])
         book, html = self.finish([question(1), hand])
         self.assertEqual(book["handwriting_questions"], 1)
+        self.assertEqual(book["parts"][0]["questions"][-1]["source"].get("kind"), "handwriting")
         self.assertIn(forge.LABELS["en"]["handwritten_note"], html)
         self.assertNotIn(note["id"], html)
 
