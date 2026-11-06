@@ -1345,8 +1345,8 @@ def cmd_source_pages(a):
     pages = set()
     for q in data["questions"]:
         if q["id"] in wanted:
-            p = q["source"]["page"]
-            pages.update(x for x in (p - 1, p, p + 1) if lo <= x <= hi)
+            for p in [q["source"]["page"]] + ([q["figure"]["page"]] if q.get("figure") else []):
+                pages.update(x for x in (p - 1, p, p + 1) if lo <= x <= hi)
     spans = []
     for p in sorted(pages):
         if spans and p == spans[-1][1] + 1:
@@ -1354,6 +1354,17 @@ def cmd_source_pages(a):
         else:
             spans.append([p, p])
     print(",".join(f"{x}-{y}" if x != y else str(x) for x, y in spans))
+
+
+def move_figure(q, old, new):
+    """A question's figure file is relative to the file holding it, so it changes when the question moves."""
+    fig = q.get("figure")
+    if isinstance(fig, dict) and fig.get("file"):
+        path = (Path(old).expanduser() / fig["file"]).resolve()
+        try:
+            fig["file"] = Path(os.path.relpath(path, Path(new).expanduser().resolve())).as_posix()
+        except ValueError:  # another drive on Windows
+            fig["file"] = str(path)
 
 
 def cmd_replace(a):
@@ -1372,6 +1383,7 @@ def cmd_replace(a):
         q["round"] = old.get("round", 1) + 1
         if old.get("audit_required"):
             q["audit_required"] = True
+        move_figure(q, Path(a.fix).parent, Path(a.chunk).parent)
         data["questions"][idx[qid]] = q
     write_json(a.chunk, data)
     run, pdf, chunk = file_context(a.chunk)
@@ -1402,6 +1414,7 @@ def cmd_merge(a):
                     unverified.append(q["id"])
                 elif q.get("audit_required") and not q.get("audited"):
                     unaudited.append(q["id"])
+                move_figure(q, p.parent, Path(a.out).parent)
                 questions.append(q)
         pdf = pdf or d.name
         stem = Path(pdf).stem
