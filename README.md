@@ -318,6 +318,8 @@ claude plugin validate .
 claude --plugin-dir .
 ```
 
+New features use a score ratchet, [`tools/ratchet.py`](tools/ratchet.py). Tests come first and must fail. Each step is scored out of 100: 70 for the feature's tests, 30 for all the others. A higher score is pushed, and a lower one is undone back to the best commit. `ratchet.py gate` passes only when every test passes, and it runs before and after each merge.
+
 ## License
 
 [MIT](LICENSE) · RetryX

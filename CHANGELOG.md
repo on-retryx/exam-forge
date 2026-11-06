@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- `tools/ratchet.py`: a score ratchet for feature work. Tests come first, a better score is pushed, a worse one is undone, and a gate checks every test around a merge
+
 ## [0.3.1] - 2026-11-06
 
 ### Added
