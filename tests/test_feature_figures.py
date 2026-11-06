@@ -134,7 +134,7 @@ class FigureFinder(Base):
 
     @staticmethod
     def picture(page, rect=(100, 150, 400, 400), seed=0):
-        page.insert_image(fitz.Rect(*rect), stream=png_bytes(seed=seed))
+        page.insert_image(fitz.Rect(*rect), stream=png_bytes(seed=seed), keep_proportion=False)
 
     @staticmethod
     def triangle(page):
@@ -269,7 +269,7 @@ class FigureFinder(Base):
 
     def test_page_size_background_and_border_are_ignored(self):
         def draw(page):
-            page.insert_image(page.rect, stream=png_bytes(seed=5))
+            page.insert_image(page.rect, stream=png_bytes(seed=5), keep_proportion=False)
             shape = page.new_shape()
             shape.draw_rect(page.rect + (10, 10, -10, -10))
             shape.finish(color=(0, 0, 0))
@@ -278,7 +278,7 @@ class FigureFinder(Base):
 
     def test_background_does_not_hide_a_real_figure(self):
         def draw(page):
-            page.insert_image(page.rect, stream=png_bytes(seed=5))
+            page.insert_image(page.rect, stream=png_bytes(seed=5), keep_proportion=False)
             self.chart(page)
         figs = self.figures(self.pdf(draw))
         self.assertEqual(len(figs), 1)

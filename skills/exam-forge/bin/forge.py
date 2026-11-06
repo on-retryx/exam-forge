@@ -7,6 +7,7 @@ Commands:
   team                                  Print the resolved team and models
   pages <pdf>                           Page count
   render-pages <pdf> <3-12> --out DIR   Rasterize pages to PNG (pymupdf or pdftoppm)
+  figures <pdf> <3-12> --out DIR        Crop graphs, charts and diagrams to PNG (pymupdf); prints them as JSON
   plan <pdf>... [--run DIR]             Question counts, difficulty split, chunks
        [--mix 0.2,0.5,0.3]              difficulty shares for this job
        [--team editor=sonnet,...] [--effort editor=high,...] [--budget usd=5]
@@ -732,13 +733,18 @@ def cmd_pages(a):
     print(n)
 
 
+def page_span(text):
+    m = re.fullmatch(r"(\d+)(?:-(\d+))?", text)
+    first, last = (int(m.group(1)), int(m.group(2) or m.group(1))) if m else (0, 0)
+    if not 1 <= first <= last:
+        fail("range must look like '3' or '3-12'")
+    return first, last
+
+
 def cmd_render_pages(a):
     """Rasterize a page range, the fallback when the Read tool cannot draw PDF pages."""
     pdf = Path(a.pdf).expanduser().resolve()
-    m = re.fullmatch(r"(\d+)(?:-(\d+))?", a.range)
-    if not m:
-        fail("range must look like '3' or '3-12'")
-    first, last = int(m.group(1)), int(m.group(2) or m.group(1))
+    first, last = page_span(a.range)
     target = Path(a.out).expanduser()
     target.mkdir(parents=True, exist_ok=True)
     fitz = load_fitz()
@@ -758,8 +764,154 @@ def cmd_render_pages(a):
         for p in sorted(target.glob(f"{pdf.stem}-p*.png")):
             print(p)
         return
+    no_page_tool()
+
+
+def no_page_tool():
     print("ERROR: no page image tool found. Run: forge.py doctor --install pdf_tool", file=sys.stderr)
     sys.exit(4)
+
+
+# ---------- figures ----------
+FIGURE_DPI = 150
+FIGURE_MIN_SIDE = 30  # points; below this it is a bullet, an icon or a rule
+FIGURE_MIN_AREA = 3600
+FIGURE_GAP = 12  # drawings this close belong to one figure
+FIGURE_LABEL_GAP = 14  # short text this close is a label of the figure
+FIGURE_LABEL_WORDS = 8  # a longer line is running text
+FIGURE_MARGIN = 4
+FIGURE_BACKGROUND = 0.9  # share of the page covered by a single background or frame
+FIGURE_REPEAT_PAGES = 3  # a logo: on at least this many pages...
+FIGURE_REPEAT_SHARE = 0.2  # ...and this share of them, as slides often repeat a figure while it builds up
+
+
+def box_near(a, b, gap):
+    return a[0] - gap <= b[2] and b[0] - gap <= a[2] and a[1] - gap <= b[3] and b[1] - gap <= a[3]
+
+
+def box_union(a, b):
+    return min(a[0], b[0]), min(a[1], b[1]), max(a[2], b[2]), max(a[3], b[3])
+
+
+def box_area(b):
+    return (b[2] - b[0]) * (b[3] - b[1])
+
+
+def cluster_boxes(items):
+    """Joins (box, members) pairs that touch or nearly touch, until none are left to join."""
+    joined = True
+    while joined:
+        joined, groups = False, []
+        for box, members in items:
+            for g in groups:
+                if box_near(g[0], box, FIGURE_GAP):
+                    g[0], joined = box_union(g[0], box), True
+                    g[1].extend(members)
+                    break
+            else:
+                groups.append([box, list(members)])
+        items = groups
+    return items
+
+
+def page_marks(page):
+    """Images and drawings on a page as clusters, minus what only covers the whole page.
+    Coordinates are those of the page before any rotation, which is what these calls report."""
+    view = tuple(page.rect * page.derotation_matrix)
+    found = [(i["bbox"], {"key": i["digest"].hex(), "image": True, "ops": []})
+             for i in page.get_image_info(hashes=True)]
+    found += [(tuple(d["rect"]), {"key": repr(d["items"]), "image": False, "ops": [x[0] for x in d["items"]]})
+              for d in page.get_drawings()]
+    items = []
+    for box, member in found:
+        box = max(box[0], view[0]), max(box[1], view[1]), min(box[2], view[2]), min(box[3], view[3])
+        if box[0] <= box[2] and box[1] <= box[3] and box_area(box) < FIGURE_BACKGROUND * box_area(view):
+            items.append((box, [member]))
+    return cluster_boxes(items)
+
+
+def is_figure(box, members):
+    width, height = box[2] - box[0], box[3] - box[1]
+    if min(width, height) < FIGURE_MIN_SIDE or width * height < FIGURE_MIN_AREA:
+        return False
+    if any(m["image"] for m in members):
+        return True
+    ops = [op for m in members for op in m["ops"]]
+    return len(ops) >= 3 and not (len(members) < 4 and set(ops) == {"re"})  # a lone box around text is no figure
+
+
+def label_boxes(page):
+    """Short lines of text on a page. Words carry their block and line numbers."""
+    lines = {}
+    for x0, y0, x1, y1, _, block, line, _ in page.get_text("words"):
+        b = lines.setdefault((block, line), [(x0, y0, x1, y1), 0])
+        b[0] = box_union(b[0], (x0, y0, x1, y1))
+        b[1] += 1
+    return [box for box, words in lines.values() if words <= FIGURE_LABEL_WORDS]
+
+
+def with_labels(box, labels):
+    """Twice, because an axis title sits beyond the tick labels."""
+    for _ in range(2):
+        for label in labels:
+            if box_near(box, label, FIGURE_LABEL_GAP):
+                box = box_union(box, label)
+    return box
+
+
+def cluster_key(members):
+    return hashlib.sha256("|".join(sorted(m["key"] for m in members)).encode("utf-8")).hexdigest()
+
+
+def repeated_marks(doc):
+    """Keys of clusters that recur across the whole file, so a chunk gets the same answer as the book."""
+    pages = {}
+    for page in doc:
+        for key in {cluster_key(members) for _, members in page_marks(page)}:
+            pages[key] = pages.get(key, 0) + 1
+    floor = max(FIGURE_REPEAT_PAGES, math.ceil(doc.page_count * FIGURE_REPEAT_SHARE))
+    return {key for key, count in pages.items() if count >= floor}
+
+
+def crop_figures(doc, fitz, first, last, target):
+    repeated = repeated_marks(doc)
+    margin = (-FIGURE_MARGIN, -FIGURE_MARGIN, FIGURE_MARGIN, FIGURE_MARGIN)
+    figures = []
+    for number in range(first, min(last, doc.page_count) + 1):
+        page = doc[number - 1]
+        keep = [box for box, members in page_marks(page) if is_figure(box, members) and cluster_key(members) not in repeated]
+        labels = label_boxes(page) if keep else []
+        crops = [(fitz.Rect(with_labels(box, labels)) + margin) * page.rotation_matrix & page.rect for box in keep]
+        n = 0
+        for rect in sorted(crops, key=lambda r: (r.y0, r.x0)):
+            pix = page.get_pixmap(dpi=FIGURE_DPI, clip=rect)
+            if pix.is_unicolor:  # white on white, or an area with nothing drawn
+                continue
+            n += 1
+            fig = f"fig-p{number}-{n}"
+            path = target / f"{fig}.png"
+            pix.save(str(path))
+            figures.append({"id": fig, "page": number, "bbox": [round(v, 1) for v in rect],
+                            "file": f"{target.name}/{fig}.png", "path": str(path)})
+    return figures
+
+
+def cmd_figures(a):
+    """Crops what could carry exam content, for the editors to choose from. `file` is relative to the folder
+    that holds --out, which is the chunk files' folder, so a question can name it as it stands."""
+    first, last = page_span(a.range)
+    fitz = load_fitz()
+    if not fitz:
+        no_page_tool()
+    pdf = Path(a.pdf).expanduser().resolve()
+    target = Path(a.out).expanduser().resolve()
+    try:
+        target.mkdir(parents=True, exist_ok=True)
+        with fitz.open(str(pdf)) as doc:
+            figures = crop_figures(doc, fitz, first, last, target)
+    except Exception as e:  # pymupdf has many error types, and a damaged PDF can raise any of them
+        fail(f"cannot read figures from {pdf.name}: {e}")
+    print(json.dumps(figures, ensure_ascii=False, indent=2))
 
 
 # ---------- plan ----------
@@ -2221,6 +2373,8 @@ def main():
     p = sub.add_parser("render-pages"); p.add_argument("pdf"); p.add_argument("range")
     p.add_argument("--out", required=True); p.add_argument("--dpi", type=int, default=110)
     p.set_defaults(f=cmd_render_pages)
+    p = sub.add_parser("figures"); p.add_argument("pdf"); p.add_argument("range")
+    p.add_argument("--out", required=True); p.set_defaults(f=cmd_figures)
     p = sub.add_parser("plan"); p.add_argument("pdfs", nargs="+"); p.add_argument("--run")
     p.add_argument("--mix"); p.add_argument("--team"); p.add_argument("--effort"); p.add_argument("--budget")
     p.add_argument("--pages", action="append"); p.set_defaults(f=cmd_plan)
