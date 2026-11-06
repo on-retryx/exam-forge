@@ -1,0 +1,12 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Agent|Task",
+        "hooks": [
+          {"type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/skills/exam-forge/bin/hook_event.py\"", "timeout": 5}
+        ]
+      }
+    ]
+  }
+}

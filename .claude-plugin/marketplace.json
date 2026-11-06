@@ -1,13 +1,11 @@
 {
-  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "retryx",
-  "description": "Retry-X'in Claude Code eklentileri",
-  "owner": {"name": "Retry-X", "url": "https://github.com/on-retryx"},
+  "owner": {"name": "Retry-X"},
   "plugins": [
     {
-      "name": "soru-kitabi",
-      "description": "Ders notu PDF'lerinden kaynağa sadık, doğrulanmış sorularla PDF soru kitabı üretir.",
+      "name": "exam-forge",
       "source": "./",
+      "description": "Turn lecture-note PDFs into a printable, source-verified question book.",
       "category": "education"
     }
   ]

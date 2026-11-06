@@ -1,0 +1,32 @@
+{
+  "field": "",
+  "output_dir": "",
+  "question_language": "auto",
+  "book_language": "auto",
+  "answer_placement": "book_end",
+  "merge_books": "ask",
+  "section_titles": "logical",
+  "difficulty_mix": {"easy": 0.25, "medium": 0.40, "hard": 0.35},
+  "short_pdf_pages": 20,
+  "short_pdf_question_options": [10, 15],
+  "questions_per_page": 1.0,
+  "split_threshold": 25,
+  "chunk_pages": 20,
+  "thin_page_floor": 0.6,
+  "mcq_options": 5,
+  "quality_preset": "quality",
+  "screener_enabled": true,
+  "chief_sample_rate": 0.25,
+  "models": {"editor": "", "screener": "", "reviewer": "", "chief_editor": ""},
+  "topic_change_round": 4,
+  "max_rounds": 6,
+  "studio_auto_open": true,
+  "studio_speech_bubbles": true,
+  "studio_port": 8765,
+  "browser": "",
+  "pricing": {
+    "haiku": {"input": 0.10, "output": 0.50, "cache_read": 0.01, "cache_write": 0.125},
+    "sonnet": {"input": 2.00, "output": 10.00, "cache_read": 0.20, "cache_write": 2.50},
+    "opus": {"input": 4.00, "output": 20.00, "cache_read": 0.20, "cache_write": 5.00}
+  }
+}

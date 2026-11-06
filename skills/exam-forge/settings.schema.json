@@ -1,0 +1,527 @@
+{
+ "groups": {
+  "book": {
+   "en": "Book",
+   "tr": "Kitap"
+  },
+  "questions": {
+   "en": "Questions",
+   "tr": "Sorular"
+  },
+  "team": {
+   "en": "Team and cost",
+   "tr": "Ekip ve maliyet"
+  },
+  "advanced": {
+   "en": "Advanced",
+   "tr": "Gelişmiş"
+  }
+ },
+ "settings": [
+  {
+   "key": "answer_placement",
+   "group": "book",
+   "type": "enum",
+   "label": {
+    "en": "Answer placement",
+    "tr": "Cevapların yeri"
+   },
+   "help": {
+    "en": "Where answers appear in the book.",
+    "tr": "Cevapların kitapta nerede duracağı."
+   },
+   "values": [
+    "book_end",
+    "inline",
+    "section_end"
+   ],
+   "value_labels": {
+    "en": {
+     "book_end": "End of the book",
+     "inline": "Under each question",
+     "section_end": "End of each section"
+    },
+    "tr": {
+     "book_end": "Kitabın sonunda",
+     "inline": "Her sorunun altında",
+     "section_end": "Her bölümün sonunda"
+    }
+   }
+  },
+  {
+   "key": "merge_books",
+   "group": "book",
+   "type": "enum",
+   "label": {
+    "en": "Merge multiple PDFs",
+    "tr": "Birden çok PDF'i birleştir"
+   },
+   "help": {
+    "en": "One book per PDF, or a single combined book.",
+    "tr": "PDF başına bir kitap mı, tek birleşik kitap mı."
+   },
+   "values": [
+    "ask",
+    "always",
+    "never"
+   ],
+   "value_labels": {
+    "en": {
+     "ask": "Ask every time",
+     "always": "Always merge",
+     "never": "Never merge"
+    },
+    "tr": {
+     "ask": "Her seferinde sor",
+     "always": "Her zaman birleştir",
+     "never": "Hiç birleştirme"
+    }
+   }
+  },
+  {
+   "key": "section_titles",
+   "group": "book",
+   "type": "enum",
+   "label": {
+    "en": "Part cover titles",
+    "tr": "Kapak başlıkları"
+   },
+   "help": {
+    "en": "Name part covers after the file, or give them a logical title from the content.",
+    "tr": "Kapakları dosya adıyla mı, içerikten çıkarılan mantıklı bir adla mı adlandıracağı."
+   },
+   "values": [
+    "logical",
+    "filename"
+   ],
+   "value_labels": {
+    "en": {
+     "logical": "Logical title",
+     "filename": "PDF file name"
+    },
+    "tr": {
+     "logical": "Mantıklı başlık",
+     "filename": "PDF dosya adı"
+    }
+   }
+  },
+  {
+   "key": "book_language",
+   "group": "book",
+   "type": "enum",
+   "label": {
+    "en": "Book language",
+    "tr": "Kitap dili"
+   },
+   "help": {
+    "en": "Language of book labels such as 'Answer Key'.",
+    "tr": "'Cevap Anahtarı' gibi kitap etiketlerinin dili."
+   },
+   "values": [
+    "auto",
+    "en",
+    "tr"
+   ],
+   "value_labels": {
+    "en": {
+     "auto": "Same as the questions",
+     "en": "English",
+     "tr": "Turkish"
+    },
+    "tr": {
+     "auto": "Sorularla aynı",
+     "en": "İngilizce",
+     "tr": "Türkçe"
+    }
+   }
+  },
+  {
+   "key": "output_dir",
+   "group": "book",
+   "type": "string",
+   "label": {
+    "en": "Output folder",
+    "tr": "Çıktı klasörü"
+   },
+   "help": {
+    "en": "Empty means next to the first PDF.",
+    "tr": "Boşsa ilk PDF'in yanına yazılır."
+   }
+  },
+  {
+   "key": "field",
+   "group": "questions",
+   "type": "string",
+   "label": {
+    "en": "Field of study",
+    "tr": "Alan"
+   },
+   "help": {
+    "en": "Sets the exam style, such as medicine or law. Empty means ask or infer.",
+    "tr": "Sınav üslubunu belirler (tıp, hukuk gibi). Boşsa sorulur ya da anlaşılır."
+   }
+  },
+  {
+   "key": "question_language",
+   "group": "questions",
+   "type": "string",
+   "label": {
+    "en": "Question language",
+    "tr": "Soru dili"
+   },
+   "help": {
+    "en": "'auto' uses the language of the PDF; otherwise a language name or code.",
+    "tr": "'auto' PDF'in dilini kullanır; değilse dil adı ya da kodu."
+   }
+  },
+  {
+   "key": "mcq_options",
+   "group": "questions",
+   "type": "enum",
+   "label": {
+    "en": "Options per multiple-choice question",
+    "tr": "Test şık sayısı"
+   },
+   "help": {
+    "en": "4 or 5.",
+    "tr": "4 ya da 5."
+   },
+   "values": [
+    4,
+    5
+   ]
+  },
+  {
+   "key": "difficulty_mix",
+   "group": "questions",
+   "type": "mix",
+   "label": {
+    "en": "Difficulty mix",
+    "tr": "Zorluk dağılımı"
+   },
+   "help": {
+    "en": "Easy, medium and hard shares; must sum to 1.",
+    "tr": "Kolay, orta ve zor oranları; toplamı 1 olmalı."
+   }
+  },
+  {
+   "key": "short_pdf_pages",
+   "group": "questions",
+   "type": "int",
+   "label": {
+    "en": "Short PDF page limit",
+    "tr": "Kısa PDF sınırı"
+   },
+   "help": {
+    "en": "PDFs below this length use the fixed question options.",
+    "tr": "Bundan kısa PDF'ler sabit soru seçeneklerini kullanır."
+   },
+   "min": 1,
+   "max": 1000
+  },
+  {
+   "key": "short_pdf_question_options",
+   "group": "questions",
+   "type": "int_list",
+   "label": {
+    "en": "Short PDF question counts",
+    "tr": "Kısa PDF soru sayıları"
+   },
+   "help": {
+    "en": "The editor picks one by content density.",
+    "tr": "Editör içerik yoğunluğuna göre birini seçer."
+   }
+  },
+  {
+   "key": "questions_per_page",
+   "group": "questions",
+   "type": "float",
+   "label": {
+    "en": "Questions per page",
+    "tr": "Sayfa başına soru"
+   },
+   "help": {
+    "en": "Used for PDFs at or above the short limit.",
+    "tr": "Kısa sınırın üstündeki PDF'lerde kullanılır."
+   },
+   "min": 0.1,
+   "max": 10
+  },
+  {
+   "key": "thin_page_floor",
+   "group": "questions",
+   "type": "float",
+   "label": {
+    "en": "Thin page floor",
+    "tr": "İnce sayfa alt oranı"
+   },
+   "help": {
+    "en": "Lowest share of the target allowed when pages carry little content.",
+    "tr": "Sayfalar az bilgi taşıyorsa hedefin inilebilecek en düşük oranı."
+   },
+   "min": 0.1,
+   "max": 1
+  },
+  {
+   "key": "quality_preset",
+   "group": "team",
+   "type": "enum",
+   "label": {
+    "en": "Team preset",
+    "tr": "Ekip hazır ayarı"
+   },
+   "help": {
+    "en": "Trades model cost against review depth.",
+    "tr": "Model maliyetini inceleme derinliğiyle dengeler."
+   },
+   "values": [
+    "quality",
+    "balanced",
+    "economy"
+   ],
+   "value_labels": {
+    "en": {
+     "quality": "Quality: Opus reviewer",
+     "balanced": "Balanced: Sonnet reviewer, Opus audit",
+     "economy": "Economy: Sonnet reviewer"
+    },
+    "tr": {
+     "quality": "Kalite: Opus reviewer",
+     "balanced": "Dengeli: Sonnet reviewer, Opus denetim",
+     "economy": "Ekonomik: Sonnet reviewer"
+    }
+   }
+  },
+  {
+   "key": "screener_enabled",
+   "group": "team",
+   "type": "bool",
+   "label": {
+    "en": "Haiku screener",
+    "tr": "Haiku ön eleme"
+   },
+   "help": {
+    "en": "Cheap first pass before the page-reading review.",
+    "tr": "Sayfa okuyan incelemeden önce ucuz ilk geçiş."
+   }
+  },
+  {
+   "key": "chief_sample_rate",
+   "group": "team",
+   "type": "float",
+   "label": {
+    "en": "Chief editor sample rate",
+    "tr": "Baş editör örneklem oranı"
+   },
+   "help": {
+    "en": "Share of easy and medium questions the chief editor re-checks.",
+    "tr": "Baş editörün yeniden denetlediği kolay ve orta soru oranı."
+   },
+   "min": 0,
+   "max": 1
+  },
+  {
+   "key": "models.editor",
+   "group": "team",
+   "type": "enum",
+   "label": {
+    "en": "Editor model override",
+    "tr": "Editör modeli"
+   },
+   "help": {
+    "en": "Empty follows the preset.",
+    "tr": "Boşsa hazır ayarı izler."
+   },
+   "values": [
+    "",
+    "haiku",
+    "sonnet",
+    "opus"
+   ]
+  },
+  {
+   "key": "models.screener",
+   "group": "team",
+   "type": "enum",
+   "label": {
+    "en": "Screener model override",
+    "tr": "Ön eleme modeli"
+   },
+   "help": {
+    "en": "Empty follows the preset.",
+    "tr": "Boşsa hazır ayarı izler."
+   },
+   "values": [
+    "",
+    "haiku",
+    "sonnet",
+    "opus"
+   ]
+  },
+  {
+   "key": "models.reviewer",
+   "group": "team",
+   "type": "enum",
+   "label": {
+    "en": "Reviewer model override",
+    "tr": "Reviewer modeli"
+   },
+   "help": {
+    "en": "Empty follows the preset.",
+    "tr": "Boşsa hazır ayarı izler."
+   },
+   "values": [
+    "",
+    "haiku",
+    "sonnet",
+    "opus"
+   ]
+  },
+  {
+   "key": "models.chief_editor",
+   "group": "team",
+   "type": "enum",
+   "label": {
+    "en": "Chief editor model override",
+    "tr": "Baş editör modeli"
+   },
+   "help": {
+    "en": "Empty follows the preset.",
+    "tr": "Boşsa hazır ayarı izler."
+   },
+   "values": [
+    "",
+    "haiku",
+    "sonnet",
+    "opus"
+   ]
+  },
+  {
+   "key": "topic_change_round",
+   "group": "team",
+   "type": "int",
+   "label": {
+    "en": "Change topic after round",
+    "tr": "Konu değiştirme turu"
+   },
+   "help": {
+    "en": "A question failing this many rounds moves to another topic.",
+    "tr": "Bu kadar tur geçemeyen soru başka konuya geçer."
+   },
+   "min": 1,
+   "max": 20
+  },
+  {
+   "key": "max_rounds",
+   "group": "team",
+   "type": "int",
+   "label": {
+    "en": "Maximum rounds",
+    "tr": "En çok tur"
+   },
+   "help": {
+    "en": "After this, the orchestrator asks you what to do.",
+    "tr": "Bundan sonra orkestratör sana sorar."
+   },
+   "min": 1,
+   "max": 30
+  },
+  {
+   "key": "split_threshold",
+   "group": "advanced",
+   "type": "int",
+   "label": {
+    "en": "Split threshold",
+    "tr": "Parçalama eşiği"
+   },
+   "help": {
+    "en": "PDFs longer than this are split into chunks.",
+    "tr": "Bundan uzun PDF'ler parçalara bölünür."
+   },
+   "min": 2,
+   "max": 1000
+  },
+  {
+   "key": "chunk_pages",
+   "group": "advanced",
+   "type": "int",
+   "label": {
+    "en": "Pages per chunk",
+    "tr": "Parça boyu"
+   },
+   "help": {
+    "en": "Target chunk length.",
+    "tr": "Hedef parça uzunluğu."
+   },
+   "min": 1,
+   "max": 200
+  },
+  {
+   "key": "studio_auto_open",
+   "group": "advanced",
+   "type": "bool",
+   "label": {
+    "en": "Open Studio automatically",
+    "tr": "Studio'yu otomatik aç"
+   },
+   "help": {
+    "en": "Opens the office view when a job starts.",
+    "tr": "İş başlayınca ofis görünümünü açar."
+   }
+  },
+  {
+   "key": "studio_speech_bubbles",
+   "group": "advanced",
+   "type": "bool",
+   "label": {
+    "en": "Task speech bubbles",
+    "tr": "Görev konuşma baloncukları"
+   },
+   "help": {
+    "en": "Bots say what they are working on in the Studio.",
+    "tr": "Botlar Studio'da o anki işlerini söyler."
+   }
+  },
+  {
+   "key": "studio_port",
+   "group": "advanced",
+   "type": "int",
+   "label": {
+    "en": "Studio port",
+    "tr": "Studio portu"
+   },
+   "help": {
+    "en": "A free port is chosen if this one is busy.",
+    "tr": "Doluysa boş bir port seçilir."
+   },
+   "min": 1024,
+   "max": 65535
+  },
+  {
+   "key": "browser",
+   "group": "advanced",
+   "type": "string",
+   "label": {
+    "en": "Browser path",
+    "tr": "Tarayıcı yolu"
+   },
+   "help": {
+    "en": "Chrome, Chromium or Edge used to print the PDF. Empty means detect.",
+    "tr": "PDF basan Chrome, Chromium ya da Edge. Boşsa bulunur."
+   }
+  },
+  {
+   "key": "pricing",
+   "group": "advanced",
+   "type": "json",
+   "label": {
+    "en": "Pricing table",
+    "tr": "Fiyat tablosu"
+   },
+   "help": {
+    "en": "USD per million tokens, used only for cost estimates.",
+    "tr": "Milyon token başına USD; yalnız maliyet tahmini için."
+   }
+  }
+ ]
+}

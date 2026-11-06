@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="forge-token" content="{{TOKEN}}">
+<title>Exam Forge Studio</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand"><span class="logo" aria-hidden="true"></span><h1>EXAM FORGE <em>STUDIO</em></h1></div>
+  <nav class="tabs" role="tablist">
+    <button role="tab" data-tab="office" aria-selected="true" data-i18n="tab_office"></button>
+    <button role="tab" data-tab="settings" aria-selected="false" data-i18n="tab_settings"></button>
+  </nav>
+  <div class="tools">
+    <select id="run" aria-label="Job"></select>
+    <button id="lang" class="chip" aria-label="Language"></button>
+    <div id="theme" class="segment" role="radiogroup" aria-label="Theme">
+      <button type="button" role="radio" data-theme-choice="light" data-i18n="theme_light"></button>
+      <button type="button" role="radio" data-theme-choice="dark" data-i18n="theme_dark"></button>
+      <button type="button" role="radio" data-theme-choice="auto" data-i18n="theme_auto"></button>
+    </div>
+  </div>
+</header>
+
+<main id="office-tab">
+  <section class="stage">
+    <canvas id="office" role="img"></canvas>
+    <div class="stage-bar">
+      <p id="banner" class="banner" hidden></p>
+      <button id="open-console" class="console-btn" data-i18n="open_console"></button>
+    </div>
+  </section>
+  <aside class="side">
+    <div class="status">
+      <p id="phase" class="phase"></p>
+      <div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="100"><span id="bar"></span></div>
+      <dl class="stats">
+        <div><dt data-i18n="stat_verified"></dt><dd id="s-verified">0</dd></div>
+        <div><dt data-i18n="stat_rewrites"></dt><dd id="s-rewrites">0</dd></div>
+        <div><dt data-i18n="stat_chunks"></dt><dd id="s-chunks">0</dd></div>
+        <div><dt data-i18n="stat_cost"></dt><dd id="s-cost">–</dd></div>
+      </dl>
+    </div>
+    <div class="team"><h2 data-i18n="team"></h2><ul id="team"></ul></div>
+    <div class="feed"><h2 data-i18n="updates"></h2><ol id="feed" aria-live="polite"></ol></div>
+  </aside>
+</main>
+
+<main id="settings-tab" hidden>
+  <p class="intro" data-i18n="settings_intro"></p>
+  <form id="settings" autocomplete="off"></form>
+</main>
+
+<dialog id="console" aria-labelledby="console-title">
+  <header class="console-head">
+    <h2 id="console-title" data-i18n="console_title"></h2>
+    <span id="console-count"></span>
+    <button id="console-close" class="chip" data-i18n="close"></button>
+  </header>
+  <div class="console-body">
+    <ul id="agents" role="listbox" tabindex="0" aria-labelledby="console-title"></ul>
+    <section class="agent-view" aria-live="polite">
+      <div class="agent-top">
+        <canvas id="agent-face" width="44" height="44" aria-hidden="true"></canvas>
+        <div>
+          <h3 id="agent-name"></h3>
+          <p id="agent-task"></p>
+          <dl class="agent-facts">
+            <div><dt data-i18n="fact_status"></dt><dd id="agent-status"></dd></div>
+            <div><dt data-i18n="fact_model"></dt><dd id="agent-model"></dd></div>
+            <div><dt data-i18n="fact_chunk"></dt><dd id="agent-chunk"></dd></div>
+          </dl>
+        </div>
+      </div>
+      <h4 data-i18n="agent_log"></h4>
+      <ol id="agent-log"></ol>
+      <footer class="agent-nav">
+        <button id="agent-prev" class="chip" data-i18n="prev"></button>
+        <button id="agent-next" class="chip" data-i18n="next"></button>
+        <button id="agent-locate" class="chip primary" data-i18n="locate"></button>
+      </footer>
+    </section>
+  </div>
+</dialog>
+
+<script src="/i18n.js"></script>
+<script src="/font.js"></script>
+<script src="/sprites.js"></script>
+<script src="/office.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>

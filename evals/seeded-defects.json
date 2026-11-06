@@ -1,0 +1,417 @@
+{
+ "source": "water-cycle.pdf",
+ "chunk": 1,
+ "format": "mcq",
+ "page_start": 1,
+ "page_end": 4,
+ "questions": [
+  {
+   "id": "p1-q01",
+   "section": "Stages of the water cycle",
+   "type": "mcq",
+   "difficulty": "easy",
+   "question": "What is the name of the pores through which plants release water vapor?",
+   "options": {
+    "A": "Stomata",
+    "B": "Roots",
+    "C": "Xylem",
+    "D": "Bark",
+    "E": "Petals"
+   },
+   "answer": "A",
+   "explanation": "Leaves release vapor through stomata.",
+   "source": {
+    "pdf": "water-cycle.pdf",
+    "section": "Stages of the water cycle",
+    "page": 2
+   },
+   "quote": "Plants release water vapor through pores in their leaves called stomata."
+  },
+  {
+   "id": "p1-q02",
+   "section": "Stages of the water cycle",
+   "type": "mcq",
+   "difficulty": "easy",
+   "question": "What must rising water vapor reach before it forms cloud droplets?",
+   "options": {
+    "A": "The dew point",
+    "B": "The boiling point",
+    "C": "The melting point",
+    "D": "The freezing line",
+    "E": "The ocean surface"
+   },
+   "answer": "A",
+   "explanation": "Vapor cools and reaches the dew point.",
+   "source": {
+    "pdf": "water-cycle.pdf",
+    "section": "Stages of the water cycle",
+    "page": 2
+   },
+   "quote": "Rising water vapor cools, reaches the dew point and becomes the water droplets that form clouds."
+  },
+  {
+   "id": "p1-q03",
+   "section": "Distribution of water",
+   "type": "mcq",
+   "difficulty": "easy",
+   "question": "What share of all water is held in the oceans?",
+   "options": {
+    "A": "96.5%",
+    "B": "86%",
+    "C": "1.7%",
+    "D": "50%",
+    "E": "less than 0.1%"
+   },
+   "answer": "A",
+   "explanation": "The table lists oceans at 96.5%.",
+   "source": {
+    "pdf": "water-cycle.pdf",
+    "section": "Distribution of water",
+    "page": 3
+   },
+   "quote": "Oceans 96.5%"
+  },
+  {
+   "id": "p1-q04",
+   "section": "Stages of the water cycle",
+   "type": "mcq",
+   "difficulty": "medium",
+   "question": "Which two processes together make up evapotranspiration?",
+   "options": {
+    "A": "Evaporation and transpiration",
+    "B": "Condensation and precipitation",
+    "C": "Runoff and infiltration",
+    "D": "Evaporation and condensation",
+    "E": "Transpiration and infiltration"
+   },
+   "answer": "A",
+   "explanation": "Transpiration together with evaporation is evapotranspiration.",
+   "source": {
+    "pdf": "water-cycle.pdf",
+    "section": "Stages of the water cycle",
+    "page": 2
+   },
+   "quote": "Together with evaporation this is called evapotranspiration."
+  },
+  {
+   "id": "p1-q05",
+   "section": "Stages of the water cycle",
+   "type": "mcq",
+   "difficulty": "medium",
+   "question": "What happens to precipitation that does not flow over the surface into streams?",
+   "options": {
+    "A": "It soaks into the soil and joins the groundwater",
+    "B": "It returns directly to the clouds",
+    "C": "It turns into glaciers at once",
+    "D": "It is absorbed by the Sun",
+    "E": "It stays in the atmosphere for 9 days"
+   },
+   "answer": "A",
+   "explanation": "Part of the precipitation soaks into the soil.",
+   "source": {
+    "pdf": "water-cycle.pdf",
+    "section": "Stages of the water cycle",
+    "page": 2
+   },
+   "quote": "Part of the precipitation flows over the surface into streams, and part soaks into the soil and joins the groundwater."
+  },
+  {
+   "id": "p1-q06",
+   "section": "Residence time",
+   "type": "mcq",
+   "difficulty": "medium",
+   "question": "Which ordering of reservoirs runs from shortest to longest residence time?",
+   "options": {
+    "A": "Atmosphere, oceans, deep groundwater",
+    "B": "Oceans, atmosphere, deep groundwater",
+    "C": "Deep groundwater, oceans, atmosphere",
+    "D": "Atmosphere, deep groundwater, oceans",
+    "E": "Oceans, deep groundwater, atmosphere"
+   },
+   "answer": "A",
+   "explanation": "Days in the atmosphere, thousands of years in oceans, tens of thousands in deep groundwater.",
+   "source": {
+    "pdf": "water-cycle.pdf",
+    "section": "Residence time",
+    "page": 4
+   },
+   "quote": "Water stays in the atmosphere for about 9 days on average, while in the oceans this reaches thousands of years. In deep groundwater, residence time can reach tens of thousands of years."
+  },
+  {
+   "id": "p1-q07",
+   "section": "Residence time",
+   "type": "mcq",
+   "difficulty": "hard",
+   "question": "A water molecule leaves the ocean as vapor and later falls as rain on land. Which two drivers are responsible for its trip up and its trip back?",
+   "options": {
+    "A": "Solar energy up, gravity back",
+    "B": "Gravity up, solar energy back",
+    "C": "Solar energy both ways",
+    "D": "Gravity both ways",
+    "E": "Wind up, solar energy back"
+   },
+   "answer": "A",
+   "explanation": "Solar energy lifts water; gravity brings it back.",
+   "source": {
+    "pdf": "water-cycle.pdf",
+    "section": "Residence time",
+    "page": 4
+   },
+   "quote": "Solar energy lifts water into the atmosphere; gravity brings it back to the land and the seas through precipitation and runoff."
+  },
+  {
+   "id": "p1-q08",
+   "section": "Distribution of water",
+   "type": "mcq",
+   "difficulty": "hard",
+   "question": "A student says most of Earth's water is usable fresh water stored in lakes. Which correction fits the distribution of water?",
+   "options": {
+    "A": "Nearly all water is in oceans, and most fresh water is in glaciers",
+    "B": "Nearly all water is in glaciers, and most fresh water is in lakes",
+    "C": "Nearly all water is in groundwater, and most fresh water is in rivers",
+    "D": "Lakes hold 1.7% of water, and most fresh water is in the atmosphere",
+    "E": "Oceans hold 1.7% of water, and most fresh water is in lakes"
+   },
+   "answer": "A",
+   "explanation": "Oceans hold 96.5%; most fresh water is in glaciers.",
+   "source": {
+    "pdf": "water-cycle.pdf",
+    "section": "Distribution of water",
+    "page": 3
+   },
+   "quote": "Most fresh water is held in glaciers."
+  },
+  {
+   "id": "p1-q09",
+   "section": "Stages of the water cycle",
+   "type": "mcq",
+   "difficulty": "medium",
+   "question": "What is the average temperature at which water vapor condenses in the lower atmosphere?",
+   "options": {
+    "A": "About 10 °C",
+    "B": "About 50 °C",
+    "C": "About 80 °C",
+    "D": "About 100 °C",
+    "E": "About 150 °C"
+   },
+   "answer": "A",
+   "explanation": "Vapor condenses at the dew point.",
+   "source": {
+    "pdf": "water-cycle.pdf",
+    "section": "Stages of the water cycle",
+    "page": 2
+   },
+   "quote": "Rising water vapor cools, reaches the dew point."
+  },
+  {
+   "id": "p1-q10",
+   "section": "Distribution of water",
+   "type": "mcq",
+   "difficulty": "easy",
+   "question": "Which reservoir holds 1.7% of all water?",
+   "options": {
+    "A": "Glaciers and snow cover",
+    "B": "Groundwater",
+    "C": "Oceans",
+    "D": "Lakes",
+    "E": "The atmosphere"
+   },
+   "answer": "A",
+   "explanation": "Glaciers hold 1.7%.",
+   "source": {
+    "pdf": "water-cycle.pdf",
+    "section": "Distribution of water",
+    "page": 3
+   },
+   "quote": "Glaciers and snow cover 1.7%"
+  },
+  {
+   "id": "p1-q11",
+   "section": "Residence time",
+   "type": "mcq",
+   "difficulty": "easy",
+   "question": "How long does water stay in the atmosphere on average?",
+   "options": {
+    "A": "About 9 hours",
+    "B": "About 90 days",
+    "C": "About 9 years",
+    "D": "About 9 days",
+    "E": "About 90 years"
+   },
+   "answer": "B",
+   "explanation": "Water stays in the atmosphere for about 90 days.",
+   "source": {
+    "pdf": "water-cycle.pdf",
+    "section": "Residence time",
+    "page": 4
+   },
+   "quote": "Water stays in the atmosphere for about 9 days on average"
+  },
+  {
+   "id": "p1-q12",
+   "section": "Stages of the water cycle",
+   "type": "mcq",
+   "difficulty": "easy",
+   "question": "Besides rain and snow, in which form does precipitation fall?",
+   "options": {
+    "A": "Hail",
+    "B": "Fog",
+    "C": "Dew",
+    "D": "Frost",
+    "E": "Steam"
+   },
+   "answer": "A",
+   "explanation": "Rain, snow or hail.",
+   "source": {
+    "pdf": "water-cycle.pdf",
+    "section": "Stages of the water cycle",
+    "page": 2
+   },
+   "quote": "Hailstones form when droplets are carried repeatedly through freezing layers of a storm cloud."
+  },
+  {
+   "id": "p1-q13",
+   "section": "Stages of the water cycle",
+   "type": "mcq",
+   "difficulty": "hard",
+   "question": "Where does about 86% of the moisture entering the atmosphere come from?",
+   "options": {
+    "A": "The oceans",
+    "B": "Plants",
+    "C": "Glaciers",
+    "D": "Rivers",
+    "E": "Groundwater"
+   },
+   "answer": "A",
+   "explanation": "It comes from the oceans.",
+   "source": {
+    "pdf": "water-cycle.pdf",
+    "section": "Stages of the water cycle",
+    "page": 2
+   },
+   "quote": "About 86% of the moisture entering the atmosphere comes from the oceans."
+  },
+  {
+   "id": "p1-q14",
+   "section": "Stages of the water cycle",
+   "type": "mcq",
+   "difficulty": "easy",
+   "question": "What provides the energy for evaporation?",
+   "options": {
+    "A": "Heat",
+    "B": "Energy from the Sun, which turns water on the surface of oceans, lakes and rivers into water vapor as it warms them",
+    "C": "Wind",
+    "D": "Gravity",
+    "E": "Soil"
+   },
+   "answer": "B",
+   "explanation": "The Sun provides the energy.",
+   "source": {
+    "pdf": "water-cycle.pdf",
+    "section": "Stages of the water cycle",
+    "page": 2
+   },
+   "quote": "Water on the surface of oceans, lakes and rivers turns into water vapor using energy from the Sun."
+  },
+  {
+   "id": "p1-q15",
+   "section": "Distribution of water",
+   "type": "mcq",
+   "difficulty": "medium",
+   "question": "Based on what was explained earlier, why is the last row of that list so small?",
+   "options": {
+    "A": "Because lakes, rivers and the atmosphere hold very little of all water",
+    "B": "Because oceans are smaller than lakes",
+    "C": "Because glaciers hold no water",
+    "D": "Because groundwater is counted twice",
+    "E": "Because rivers are not water"
+   },
+   "answer": "A",
+   "explanation": "They hold less than 0.1%.",
+   "source": {
+    "pdf": "water-cycle.pdf",
+    "section": "Distribution of water",
+    "page": 3
+   },
+   "quote": "Lakes, rivers, atmosphere less than 0.1%"
+  },
+  {
+   "id": "p1-q16",
+   "section": "Stages of the water cycle",
+   "type": "mcq",
+   "difficulty": "easy",
+   "question": "What is this process called?",
+   "options": {
+    "A": "Condensation",
+    "B": "Evaporation",
+    "C": "Runoff",
+    "D": "Infiltration",
+    "E": "Precipitation"
+   },
+   "answer": "A",
+   "explanation": "It is condensation.",
+   "source": {
+    "pdf": "water-cycle.pdf",
+    "section": "Stages of the water cycle",
+    "page": 2
+   },
+   "quote": "Rising water vapor cools, reaches the dew point and becomes the water droplets that form clouds."
+  },
+  {
+   "id": "p1-q17",
+   "section": "Stages of the water cycle",
+   "type": "mcq",
+   "difficulty": "medium",
+   "question": "What share of the moisture entering the atmosphere comes from evapotranspiration over land?",
+   "options": {
+    "A": "About 14%",
+    "B": "About 50%",
+    "C": "About 86%",
+    "D": "About 96.5%",
+    "E": "About 1.7%"
+   },
+   "answer": "A",
+   "explanation": "Since 86% comes from oceans, 14% comes from land by evapotranspiration.",
+   "source": {
+    "pdf": "water-cycle.pdf",
+    "section": "Stages of the water cycle",
+    "page": 2
+   },
+   "quote": "About 86% of the moisture entering the atmosphere comes from the oceans."
+  },
+  {
+   "id": "p1-q18",
+   "section": "Distribution of water",
+   "type": "mcq",
+   "difficulty": "medium",
+   "question": "Where is most of Earth's fresh water held?",
+   "options": {
+    "A": "In groundwater",
+    "B": "In glaciers",
+    "C": "In rivers",
+    "D": "In lakes",
+    "E": "In the atmosphere"
+   },
+   "answer": "A",
+   "explanation": "Most fresh water is in groundwater.",
+   "source": {
+    "pdf": "water-cycle.pdf",
+    "section": "Distribution of water",
+    "page": 3
+   },
+   "quote": "Most fresh water is held in glaciers."
+  }
+ ],
+ "_defects": {
+  "p1-q09": "out_of_source",
+  "p1-q10": "multi_correct",
+  "p1-q11": "wrong_answer",
+  "p1-q12": "no_quote",
+  "p1-q13": "difficulty",
+  "p1-q14": "giveaway",
+  "p1-q15": "reference",
+  "p1-q16": "not_standalone",
+  "p1-q17": "out_of_source",
+  "p1-q18": "wrong_answer"
+ }
+}

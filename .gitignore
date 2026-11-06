@@ -1,7 +1,7 @@
 __pycache__/
 *.pyc
 .DS_Store
-.calisma/
-*-sorular.pdf
-*-sorular-*.pdf
-!ornek/*-sorular.pdf
+.exam-forge/
+*-questions.pdf
+*-questions-*.pdf
+!examples/*-questions.pdf

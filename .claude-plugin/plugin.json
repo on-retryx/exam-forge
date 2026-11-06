@@ -1,10 +1,10 @@
 {
-  "name": "soru-kitabi",
-  "version": "0.1.0",
-  "description": "Ders notu PDF'lerinden yalnız o kaynağa dayanan, bağımsız bir doğrulayıcıdan geçmiş sorularla PDF soru kitabı üretir (test, klasik, karma).",
-  "author": {"name": "Retry-X", "url": "https://github.com/on-retryx"},
-  "homepage": "https://github.com/on-retryx/soru-kitabi",
-  "repository": "https://github.com/on-retryx/soru-kitabi",
+  "name": "exam-forge",
+  "version": "0.2.0",
+  "description": "Turn lecture-note PDFs into a printable question book. Every question comes from your source and passes an independent review. Includes a live pixel-art studio.",
+  "author": {"name": "Retry-X"},
+  "homepage": "https://github.com/on-retryx/exam-forge",
+  "repository": "https://github.com/on-retryx/exam-forge",
   "license": "MIT",
-  "keywords": ["sınav", "soru", "eğitim", "pdf", "quiz", "exam", "question-generation", "multi-agent"]
+  "keywords": ["exam", "quiz", "study", "questions", "pdf", "education"]
 }

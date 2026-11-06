@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="{{LANG}}">
+<head>
+<meta charset="utf-8">
+<title>{{TITLE}} · {{BOOK}}</title>
+<style>{{CSS}}</style>
+</head>
+<body>
+<section class="cover">
+  <div class="cover-top">
+    <span class="label">{{BOOK}}</span>
+    <span class="date">{{DATE}}</span>
+  </div>
+  <div class="cover-middle">
+    <h1>{{TITLE}}</h1>
+    <p class="subtitle">{{FORMAT}} · {{TOTAL}} · {{SECTIONS}}</p>
+  </div>
+  <div class="cover-bottom">
+    <p class="mix-title">{{MIX_LABEL}}</p>
+    <div class="bar">{{BAR}}</div>
+    <ul class="legend">{{LEGEND}}</ul>
+    <p class="source-note">{{SOURCE_LABEL}}: {{SOURCE}}</p>
+  </div>
+</section>
+
+<section class="contents">
+  <h2>{{CONTENTS}}</h2>
+  <ol>{{TOC}}</ol>
+  <p class="guide">{{GUIDE}}</p>
+</section>
+
+{{BODY}}
+</body>
+</html>

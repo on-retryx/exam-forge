@@ -1,122 +1,186 @@
-# soru-kitabi
+# Exam Forge
 
-Ders notu PDF'lerinden **yalnız o kaynağa dayanan** ve **bağımsız bir doğrulayıcıdan geçmiş** sorularla PDF soru kitabı üreten bir Claude Code eklentisi.
+Turn lecture notes into a printable question book, where **every question comes from your source** and **passes an independent review** before it gets in. Exam Forge is a [Claude Code](https://claude.com/claude-code) plugin, and you can watch its editorial team work in a small pixel-art office.
 
-Yapay zekâyla soru üretmenin asıl sorunu hız değil, güven. Model, kaynakta olmayan bir bilgiyi soruya ekleyebilir, iki doğru şıklı soru yazabilir ya da cevap anahtarını yanlış verebilir. soru-kitabi bunu iki kuralla çözer:
+![Exam Forge Studio](docs/studio.png)
 
-1. **Her soru kaynağa bağlıdır.** Her soru, cevabı destekleyen sayfa numarasını ve o sayfadan birebir alıntıyı taşır.
-2. **Doğrulanmamış soru kitaba girmez.** Ayrı bir doğrulayıcı ajan PDF sayfalarını kendisi açar ve her soruyu tek tek denetler. Geçemeyen soru yeniden yazılır. Bu kural araç tarafından zorlanır; atlanamaz.
+## Why
 
-## Ne üretir
+AI can write exam questions quickly. The hard part is trusting them. A model can add a fact that was never in your notes, write two correct options, or give the wrong answer key. Exam Forge is built around two rules:
 
-- **Formatlar:** Test (4 ya da 5 şıklı) · Klasik (açık uçlu) · Karma klasik (klasik + boşluk doldurma + doğru/yanlış) · Tam karma (karma klasik + test)
-- **Zorluk:** kolay %25, orta %40, zor %35 (ayarlanabilir)
-- **Kitap düzeni:** kapak, zorluk dağılımı, içindekiler; bölümler kaynaktaki sırayla, her bölümde kolaydan zora; her bölüm sonunda cevap anahtarı (cevap, kısa açıklama, kaynak sayfa)
+1. **Every question is tied to its source.** Each one carries the page number and a verbatim quote that supports the answer.
+2. **Unreviewed questions cannot enter the book.** A separate reviewer opens the PDF pages itself and checks each question. Whatever fails is rewritten. The tool enforces this, so it cannot be skipped.
 
-## Nasıl çalışır
+## What you get
 
-```
-PDF'ler ──► Plan ──► Yazarlar (paralel, parça başına bir ajan)
-                         │
-                         ▼
-                 Mekanik kontrol (kitap.py)
-                         │
-                         ▼
-             Doğrulayıcı (sayfaları kendisi açar) ──FAIL──► Yeniden yazım ─┐
-                         │ PASS                                            │
-                         ▼                                                 │
-                 Birleştirme ──► PDF kitap        ◄────────────────────────┘
-```
+- **Formats:** multiple choice (4 or 5 options) · open-ended · mixed (open + fill-in-the-blank + true/false) · full mix
+- **Difficulty:** easy 25%, medium 40%, hard 35% (adjustable)
+- **Answers where you want them:** at the end of the book, under each question, or at the end of each section
+- **Several PDFs:** one book per PDF, or a single merged book with a cover for each part, named after the file or with a logical title
+- **Any language:** questions follow the language of your PDF. Book labels come in English and Turkish.
+- **A live Studio:** a local animated office with the team at their desks, progress, reasons for rejections and estimated cost
 
-- **Orkestratör** (ana oturum): işi böler, ajanları paralel çalıştırır, kuyruğu yönetir.
-- **soru-yazari** (varsayılan Sonnet): yalnız kendi sayfa aralığını okur ve soruları yazar.
-- **soru-dogrulayici** (varsayılan Opus): alıntıyı sayfada arar. Dış bilgi, birden çok doğru şık, yanlış cevap, zayıf çeldirici, kaynağa gönderme ("slayta göre" vb.) ve yanlış zorluk etiketi için FAIL verir.
-- **kitap.py**: plan, mekanik kontrol, onay, birleştirme ve PDF basımı. Yalnız Python standart kütüphanesini kullanır.
+## Install
 
-Uzun PDF'ler ~20 sayfalık parçalara bölünür. 20 sayfadan kısa bir PDF'ten 10 ya da 15 soru çıkar; daha uzun PDF'lerde sayfa başına bir soru düşer. Sayfalar çok az bilgi taşıyorsa yazar soru sayısını gerekçesiyle azaltabilir; doğrulayıcı bu gerekçeyi de denetler.
+You need Claude Code, Python 3.9+, and Chrome, Chromium or Edge to print the PDF. Without a browser, the book comes out as HTML that you can print from any browser.
 
-## Kurulum
-
-Gerekenler: [Claude Code](https://claude.com/claude-code), Python 3.9+, PDF basımı için Google Chrome, Chromium ya da Microsoft Edge. Tarayıcı yoksa kitap HTML olarak çıkar; tarayıcıda açıp PDF olarak kaydedebilirsin.
-
-Claude Code içinde:
+In Claude Code:
 
 ```
-/plugin marketplace add on-retryx/soru-kitabi
-/plugin install soru-kitabi@retryx
+/plugin install exam-forge --marketplace on-retryx/exam-forge
 ```
 
-## Kullanım
-
-PDF'leri sohbete sürükle ya da yollarını yaz ve iste:
+Or in two steps:
 
 ```
-/soru-kitabi ~/Dersler/hafta3.pdf ~/Dersler/hafta4.pdf
+/plugin marketplace add on-retryx/exam-forge
+/plugin install exam-forge@retryx
 ```
 
-ya da doğal dille: "Bu iki PDF'ten soru kitabı hazırla, hoca özellikle 2. bölümü vurguladı."
+## Use
 
-Araç formatı her seferinde sorar. Alanı (tıp, hukuk, mühendislik…) ve önemli notları (vurgulanan konular, kapsam dışı yerler) da sorar. Kitap, varsayılan olarak PDF'in yanına `<ad>-sorular.pdf` adıyla yazılır.
+Drop PDFs into the chat or give their paths, then ask in plain words:
 
-Denemek için [`ornek/su-dongusu.pdf`](ornek/su-dongusu.pdf) dosyasını kullanabilirsin: bu araç için yazılmış 4 sayfalık, telif sorunu olmayan bir örnek ders notu. Araçtan çıkan kitap [`ornek/su-dongusu-sorular.pdf`](ornek/su-dongusu-sorular.pdf) dosyasında: 10 test sorusu, 3'ü doğrulayıcıdan ilk turda geçemeyip yeniden yazıldı (zorluk etiketi, bilgi tekrarı, örtük kaynak göndermesi).
+> Make a question book from these two PDFs. The teacher stressed chapter 2.
 
-## Ayarlar
+Or call it directly:
 
-Varsayılanlar [`skills/soru-kitabi/ayarlar.json`](skills/soru-kitabi/ayarlar.json) dosyasındadır. Değiştirmek için `~/.config/soru-kitabi/ayarlar.json` oluştur ve yalnız değiştirmek istediğin anahtarları yaz:
-
-```json
-{
-  "cikti_klasoru": "~/Masaüstü/Sınav Hazırlığı",
-  "alan": "hukuk",
-  "test_sik_sayisi": 4,
-  "ekonomik_mod": true
-}
+```
+/exam-forge:exam-forge ~/Courses/week3.pdf ~/Courses/week4.pdf
 ```
 
-| Anahtar | Varsayılan | Ne işe yarar |
+Exam Forge asks for the format, where answers should go and, for several PDFs, whether to merge them. The book lands next to your PDF as `<name>-questions.pdf`.
+
+Try it with [`examples/water-cycle.pdf`](examples/water-cycle.pdf). [`examples/water-cycle-questions.pdf`](examples/water-cycle-questions.pdf) is a real output: one merged book from that note and its Turkish twin, 20 questions, with 7 of them rewritten after review.
+
+## How it works
+
+```
+PDFs ─► Plan ─► Editors (parallel, one per chunk)
+                   │
+                   ▼
+           Mechanical check (forge.py)
+                   │
+                   ▼
+           Screener (Haiku, no PDF) ──── fail ──► Rewrite ─┐
+                   │ pass                                  │
+                   ▼                                       │
+           Reviewer (opens the pages) ── fail ──► Rewrite ─┤
+                   │ pass                                  │
+                   ▼                                       │
+           Chief editor (balanced preset) ─ fail ► Rewrite ─┘
+                   │ pass
+                   ▼
+           Merge ─► PDF book
+```
+
+| Role | Default model | Job |
 |---|---|---|
-| `alan` | boş | Soruların üslubu için ders alanı; boşsa sorulur |
-| `cikti_klasoru` | boş | Boşsa kitap PDF'in yanına yazılır |
-| `zorluk_oranlari` | 0.25 / 0.40 / 0.35 | Kolay / orta / zor oranı (toplam 1) |
-| `kisa_pdf_sayfa_esigi` | 20 | Bundan kısa PDF'lere sabit seçenekli soru sayısı |
-| `kisa_pdf_soru_secenekleri` | [10, 15] | Kısa PDF'te yazarın seçebileceği adetler |
-| `uzun_pdf_sayfa_basina_soru` | 1.0 | Uzun PDF'te sayfa başına soru |
-| `parca_esigi` / `parca_boyu` | 25 / 20 | Bundan uzun PDF'ler bu boyda parçalara bölünür |
-| `ince_sayfa_alt_oran` | 0.6 | İnce sayfa azaltmasında inilebilecek en düşük oran |
-| `test_sik_sayisi` | 5 | Test sorularında şık sayısı (4 ya da 5) |
-| `ekonomik_mod` | false | Doğrulayıcıyı da Sonnet ile çalıştırır |
-| `modeller` | sonnet / opus | Yazar ve doğrulayıcı modelleri |
-| `konu_degistir_turu` / `en_cok_tur` | 4 / 6 | Geçemeyen soru için konu değiştirme ve kullanıcıya sorma eşikleri |
-| `chrome` | boş | Tarayıcı yolu (ya da `SORU_KITABI_CHROME` ortam değişkeni) |
+| Orchestrator | your session | Splits the work, runs the team, manages the queue |
+| Editor | Sonnet | Reads only its pages and writes the questions |
+| Screener | Haiku | Catches defects visible in the text, before any costly review |
+| Reviewer | Opus | Opens the pages and proves each question against the source. Only this step can verify a question. |
+| Chief editor | Opus, `balanced` only | Re-checks hard and rewritten questions plus a sample of the rest |
+| `forge.py` | no model | Plan, mechanical checks, approvals, merging, printing. Python standard library only. |
 
-Geçerli ayarları görmek için: `python3 skills/soru-kitabi/bin/kitap.py ayarlar`
+## Cost and quality
 
-## Maliyet
+The main cost is reopening PDF pages, not writing. Two savings are always on and do not touch quality: the Haiku screener catches text-level defects before the expensive review, and correction rounds reopen only the pages of the rejected questions.
 
-Doğrulayıcı her sayfayı yeniden açtığı için araç token harcar. Örnek ders notu (4 sayfa, 10 soru, 4 doğrulama turu) API fiyatlarıyla yaklaşık 2,2 $ ve 6 dakika tuttu. 60 sayfalık bir PDF, Claude Pro planında oturum limitinin kayda değer bir kısmını tüketebilir. Limitin darsa `ekonomik_mod` ayarını aç ya da PDF'leri tek tek işle. Ekonomik modda doğrulama biraz daha az titiz olur.
+Beyond that, you choose a team preset:
 
-## Gizlilik ve telif
+| Preset | Reviewer | Chief editor | Use it when |
+|---|---|---|---|
+| `quality` (default) | Opus | none | The book matters most |
+| `balanced` | Sonnet | Opus on a sample | You want lower cost with a final check |
+| `economy` | Sonnet | none | Your plan limit is tight |
 
-- Araç yalnız senin verdiğin dosyaları okur. Web araması yapmaz, başka kaynak kullanmaz.
-- Üretilen sorular senin çalışma malzemendir. Araç bunları başka bir yere kopyalamaz.
-- Yalnız kullanma hakkın olan materyali yükle. Üretilen sorular kaynaktan kısa alıntılar içerir.
-- Doğrulayıcı hataları büyük ölçüde yakalar ama bir yapay zekâdır. Kitabı sınava hazırlık için kullan; resmî sınav sorusu olarak kullanmadan önce bir insan kontrol etmeli.
+Haiku never writes questions and never verifies them. If it misses something, the reviewer still sees every question.
 
-## Geliştirme
+**What we measured.** `evals/run.py` gives each team the same 18 questions on a 4-page note, with 10 planted defects (outside knowledge, two correct answers, wrong keys, a fake quote, a wrong difficulty, a giveaway option, references to the source). Two trials per preset:
+
+| Preset | Defects caught | Screener alone | Cost per trial |
+|---|---|---|---|
+| `quality` | 10 of 10 | 7 to 8 | about $0.41 |
+| `balanced` | 10 of 10 | 7 to 9 | about $0.43 |
+| `economy` | 10 of 10 | 6 to 7 | about $0.28 |
+
+All three also failed 3 control questions that we had labeled too hard, so those were our mistakes, not false alarms. The screener wrongly flagged one clean question once. This is a small test on one short note, so treat it as an observation, not proof. On it, the Sonnet reviewer matched Opus, and `balanced` saved nothing. `quality` stays the default until a larger test says otherwise.
+
+**A full job costs more than a review.** A merged book from two 4-page notes (20 questions, 7 rewritten) came to $9.93 at API prices. The team was $4.14 (reviewer $2.71, editors $1.39, screener $0.04); the rest was the Opus orchestrator, inflated by long API delays during that run. Short notes run out of distinct facts, which also adds rewrite rounds.
+
+Long PDFs can use a real share of a Claude Pro session. `/exam-forge:exam-forge` reports the team's cost at the end. Run the comparison yourself with `python3 evals/run.py`, which spends real tokens.
+
+## Studio
+
+The Studio opens in your browser when a job starts. It is a pixel-art office drawn entirely in code, including its own font, with no image files, downloads or external services, and it runs only on your computer.
+
+- The team grows with the job: hopping pixel bots in different shapes for each editor and reviewer, a screener, and a crowned chief editor in a glass office, all at desks with their own PCs
+- Bots carry pages between desks, PASS and FAIL stamps appear, and speech bubbles show what each bot is doing (`studio_speech_bubbles` turns them off)
+- Click the chief editor's computer, or any bot, to open the team console: every agent, its current task, model and recent activity. Move through agents with the arrow keys, or show one in the office.
+- Live progress, reasons for rejection, estimated cost, past jobs and every setting
+- English and Turkish, day and night themes. With no job running, it plays a demo.
+
+It never shows question text. Open it any time with `/exam-forge:studio`. To stop it opening by itself: `studio_auto_open` = `false`.
+
+## Settings
+
+Change settings in the Studio, in plain words with `/exam-forge:config`, or from the helper:
+
+```
+/exam-forge:config set answer_placement inline
+/exam-forge:config set quality_preset balanced
+```
+
+They are stored in `~/.config/exam-forge/settings.json`.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `answer_placement` | `book_end` | `book_end`, `inline` or `section_end` |
+| `merge_books` | `ask` | `ask`, `always` or `never` |
+| `section_titles` | `logical` | Part covers: `logical` title or `filename` |
+| `book_language` | `auto` | Book labels: `auto`, `en` or `tr` |
+| `question_language` | `auto` | `auto` follows the PDF; or a language name |
+| `output_dir` | empty | Empty means next to the first PDF |
+| `field` | empty | Exam style, such as medicine or law |
+| `mcq_options` | 5 | Options per question: 4 or 5 |
+| `difficulty_mix` | 0.25 / 0.40 / 0.35 | Easy, medium, hard; sums to 1 |
+| `short_pdf_pages` | 20 | Below this, use fixed question counts |
+| `short_pdf_question_options` | 10, 15 | Counts the editor can pick on short PDFs |
+| `questions_per_page` | 1.0 | For longer PDFs |
+| `thin_page_floor` | 0.6 | Lowest share of the target on thin pages |
+| `quality_preset` | `quality` | `quality`, `balanced` or `economy` |
+| `screener_enabled` | true | Haiku first pass |
+| `chief_sample_rate` | 0.25 | Share of easy and medium questions the chief editor checks |
+| `models.*` | empty | Override a role: `editor`, `screener`, `reviewer`, `chief_editor` |
+| `topic_change_round` / `max_rounds` | 4 / 6 | When a stuck question changes topic, and when you are asked |
+| `split_threshold` / `chunk_pages` | 25 / 20 | PDFs longer than this split into chunks of this size |
+| `studio_auto_open` / `studio_port` | true / 8765 | Studio behavior |
+| `studio_speech_bubbles` | true | Bots show their current task in the Studio |
+| `browser` | empty | Browser path for printing (or `EXAM_FORGE_BROWSER`) |
+| `pricing` | see file | USD per million tokens, used only for estimates |
+
+## Privacy and copyright
+
+- Exam Forge reads only the files you give it. It does not search the web or use other sources.
+- Your questions stay yours. The run folder sits next to your book, and nothing is copied elsewhere. Your PDFs are processed by Claude as usual in Claude Code.
+- Use only material you have the right to use. Questions include short quotes from the source.
+- The review catches most errors, but it is still AI. Use the book to study. Have a person check it before using it as an official exam.
+
+## Development
 
 ```
 python3 -m unittest discover -s tests
 claude plugin validate .
+claude --plugin-dir .
 ```
 
-Yerelde denemek için: `claude --plugin-dir /yol/soru-kitabi`
-
-## Lisans
+## License
 
 [MIT](LICENSE) · Retry-X
 
 ---
 
-## English summary
+## Türkçe özet
 
-**soru-kitabi** is a Claude Code plugin that turns lecture-note PDFs into a printable question book (multiple choice, open-ended, fill-in-the-blank, true/false). Every question cites its source page with a verbatim quote. A separate verifier agent opens the pages itself and checks each question for outside knowledge, multiple correct answers, wrong keys and source references. Unverified questions cannot enter the book. The interface and output are in Turkish. Install with `/plugin marketplace add on-retryx/soru-kitabi` and `/plugin install soru-kitabi@retryx`. MIT licensed.
+**Exam Forge**, ders notu PDF'lerinden yazdırılabilir soru kitabı üreten bir Claude Code eklentisidir. Her soru kaynak sayfa ve birebir alıntı taşır. Ayrı bir reviewer sayfaları kendisi açıp denetler, doğrulanmamış soru kitaba giremez. Sorular PDF'in dilinde yazılır; Türkçe kaynak Türkçe soru verir. Kitap etiketleri ve Studio arayüzü Türkçe de kullanılabilir. Cevaplar kitabın sonuna, sorunun altına ya da bölüm sonuna konabilir. Birden çok PDF tek kitapta birleştirilebilir. Tüm ayarlar Studio'dan ya da `/exam-forge:config` ile değişir. Kurulum: `/plugin install exam-forge --marketplace on-retryx/exam-forge`.
