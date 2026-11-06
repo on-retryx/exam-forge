@@ -6,6 +6,7 @@
   "answer_placement": "book_end",
   "merge_books": "ask",
   "section_titles": "logical",
+  "book_contents": "ask",
   "difficulty_mix": {"easy": 0.25, "medium": 0.40, "hard": 0.35},
   "short_pdf_pages": 20,
   "short_pdf_question_options": [10, 15],

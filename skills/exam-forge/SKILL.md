@@ -34,7 +34,7 @@ Leave out `--pdf` and `--notes` when you have none: the user adds files or folde
 python3 "$FORGE" intake wait
 ```
 When it exits, read its output:
-- **Exit 0:** the JSON is the job: `pdfs`, `format`, `mcq_options`, `answer_placement`, `merge` (true, false, or null for one PDF), `notes`, `field`. These replace every question below; ask nothing more and go to section 2. An empty `field` means no field. Remember that this job came from the form.
+- **Exit 0:** the JSON is the job: `pdfs`, `format`, `mcq_options`, `answer_placement`, `merge` (true, false, or null for one PDF), `notes`, `field`, `difficulty_mix`, `contents`. These replace every question below; ask nothing more and go to section 2. An empty `field` means no field. Remember that this job came from the form.
 - **Exit 5:** the user cancelled in the Studio. Say so in one line and stop.
 - **Exit 4:** the form timed out. Tell the user to run the command again, and stop.
 

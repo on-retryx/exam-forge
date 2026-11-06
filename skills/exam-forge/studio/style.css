@@ -184,8 +184,13 @@ legend + * { clear: both; }
 .field input[type=checkbox] { appearance: none; width: 20px; height: 20px; margin: 2px; background: var(--sunken); cursor: pointer; }
 .field input[type=checkbox]:checked { background: linear-gradient(var(--accent), var(--accent)) center / 12px 12px no-repeat var(--sunken); }
 .field textarea { min-height: 130px; }
-.mix { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
-.mix label { color: var(--muted); }
+.mix { display: grid; gap: 10px; min-width: min(320px, 100%); }
+.mix label { display: grid; grid-template-columns: 56px 1fr 44px; align-items: center; gap: 10px; color: var(--muted); }
+.mix output { color: var(--ink); text-align: right; }
+.mix input[type=range] { appearance: none; -webkit-appearance: none; width: 100%; height: 10px; margin: 0; padding: 0; border: 0; background: var(--sunken); box-shadow: inset 0 0 0 2px var(--line); cursor: pointer; }
+.mix input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 22px; background: var(--accent); box-shadow: 0 0 0 2px var(--line); }
+.mix input[type=range]::-moz-range-thumb { width: 14px; height: 22px; border: 0; border-radius: 0; background: var(--accent); box-shadow: 0 0 0 2px var(--line); }
+.label { font-weight: inherit; }
 .state { min-height: 20px; color: var(--muted); display: flex; justify-content: space-between; gap: 8px; }
 .state .ok { color: var(--good); } .state .err { color: var(--bad); }
 .state button { background: var(--sunken); padding: 0 6px; cursor: pointer; }

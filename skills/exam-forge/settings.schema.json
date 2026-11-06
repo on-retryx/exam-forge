@@ -106,6 +106,36 @@
    }
   },
   {
+   "key": "book_contents",
+   "group": "book",
+   "type": "enum",
+   "label": {
+    "en": "Contents page",
+    "tr": "İçindekiler sayfası"
+   },
+   "help": {
+    "en": "Whether the printed book has a contents page.",
+    "tr": "Basılan kitapta içindekiler sayfası olup olmayacağı."
+   },
+   "values": [
+    "ask",
+    "always",
+    "never"
+   ],
+   "value_labels": {
+    "en": {
+     "ask": "Ask every time",
+     "always": "Always include",
+     "never": "Never include"
+    },
+    "tr": {
+     "ask": "Her seferinde sor",
+     "always": "Her zaman olsun",
+     "never": "Hiç olmasın"
+    }
+   }
+  },
+  {
    "key": "book_language",
    "group": "book",
    "type": "enum",
@@ -200,8 +230,8 @@
     "tr": "Zorluk dağılımı"
    },
    "help": {
-    "en": "Easy, medium and hard shares; must sum to 1.",
-    "tr": "Kolay, orta ve zor oranları; toplamı 1 olmalı."
+    "en": "Easy, medium and hard shares. The three always add up to 100%.",
+    "tr": "Kolay, orta ve zor oranları. Üçünün toplamı her zaman %100 olur."
    }
   },
   {

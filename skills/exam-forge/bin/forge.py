@@ -8,6 +8,7 @@ Commands:
   pages <pdf>                           Page count
   render-pages <pdf> <3-12> --out DIR   Rasterize pages to PNG (pymupdf or pdftoppm)
   plan <pdf>... [--run DIR]             Question counts, difficulty split, chunks
+       [--mix 0.2,0.5,0.3]              difficulty shares for this job
        [--pages file.pdf=N ...]         give the page count when it cannot be read
   check <chunk.json> [--format F] [--expected easy=2,medium=5,hard=3]
        [--mcq-options 4|5] [--min N]    --min allows a justified thin-page reduction
@@ -19,7 +20,7 @@ Commands:
   replace <chunk.json> <fix.json>       Swap questions that have the same id
   merge <pdf_dir>... --out book.json --title T --format F
        [--part file.pdf=Name ...] [--language en] [--titles logical|filename]
-  render <book.json> <out.pdf> [--answers book_end|inline|section_end] [--html F]
+  render <book.json> <out.pdf> [--answers book_end|inline|section_end] [--html F] [--no-contents]
   event <run> <type> [key=value ...]    Append an event by hand (hook fallback)
   cost <run>                            Tokens and estimated cost from transcripts
   studio [--port N] [--no-open]         Start the local office view
@@ -528,7 +529,21 @@ def plan_pdf(pdf: Path, pages: int):
     }
 
 
+def use_mix(mix, key="--mix"):
+    """Use a difficulty mix for this job instead of the setting."""
+    spec = next(x for x in load_schema()["settings"] if x["key"] == "difficulty_mix")
+    error = validate_value(spec, mix)
+    if error:
+        raise SettingsError(error.replace("difficulty_mix", key))
+    S["difficulty_mix"] = mix
+
+
 def cmd_plan(a):
+    if a.mix:
+        try:
+            use_mix(parse_value(next(x for x in load_schema()["settings"] if x["key"] == "difficulty_mix"), a.mix))
+        except (SettingsError, ValueError) as e:
+            fail(str(e))
     manual = {}
     for s in a.pages or []:
         k, _, v = s.rpartition("=")
@@ -560,6 +575,7 @@ def cmd_plan(a):
         # or rasterize with render-pages.
         "read_pages_supported": bool(shutil.which("pdftoppm")),
         "team": team,
+        "difficulty_mix": S["difficulty_mix"],
         "pdfs": plans,
     }
     text = json.dumps(result, ensure_ascii=False, indent=2)
@@ -637,6 +653,11 @@ def cmd_check(a):
     page_range = None
     if data.get("page_start") and data.get("page_end"):
         page_range = (data["page_start"], data["page_end"])
+    run = find_run(a.json)
+    if run:  # a job can set its own mix; the thin-page rule below must follow it
+        mix = json.loads((run / "plan.json").read_text(encoding="utf-8")).get("difficulty_mix")
+        if mix:
+            use_mix(mix)
     errors = []
     ids = [q.get("id") for q in questions]
     if len(set(ids)) != len(ids):
@@ -935,7 +956,7 @@ def format_date(iso, L):
     return L["date"].format(day=d.day, month=L["months"][d.month - 1], year=d.year)
 
 
-def build_book_html(book, placement):
+def build_book_html(book, placement, contents=True):
     L = LABELS.get(book.get("language"), LABELS["en"])
     parts = book["parts"]
     multi = len(parts) > 1
@@ -982,6 +1003,7 @@ def build_book_html(book, placement):
     count = {z: sum(1 for q in questions if q["difficulty"] == z) for z in DIFFICULTIES}
     bar = "".join(f'<span class="{z}" style="flex:{max(count[z], 0.001)}"></span>' for z in DIFFICULTIES)
     legend = "".join(f'<li><i class="{z}"></i>{L[z]} <b>{count[z]}</b></li>' for z in DIFFICULTIES)
+    guide = f'<p class="guide">{L[f"guide_{placement}"]}</p>'
     css = (TEMPLATES / "book.css").read_text(encoding="utf-8")
     page = (TEMPLATES / "book.html").read_text(encoding="utf-8")
     fills = {
@@ -990,8 +1012,10 @@ def build_book_html(book, placement):
         "FORMAT": L.get(f'fmt_{book.get("format")}', esc(book.get("format", ""))),
         "DATE": format_date(book.get("date", dt.date.today().isoformat()), L),
         "TOTAL": count_label(len(questions), L, "questions"), "SECTIONS": count_label(sec_no - 1, L, "sections"),
-        "MIX_LABEL": L["difficulty_mix"], "BAR": bar, "LEGEND": legend, "CONTENTS": L["contents"],
-        "TOC": "".join(toc), "GUIDE": L[f"guide_{placement}"], "BODY": "".join(body),
+        "MIX_LABEL": L["difficulty_mix"], "BAR": bar, "LEGEND": legend, "BODY": "".join(body),
+        "CONTENTS_PAGE": (f'<section class="contents"><h2>{L["contents"]}</h2><ol>{"".join(toc)}</ol>{guide}</section>'
+                          if contents else ""),
+        "COVER_GUIDE": "" if contents else guide,
     }
     for k, v in fills.items():
         page = page.replace("{{" + k + "}}", v)
@@ -1010,7 +1034,8 @@ def cmd_render(a):
     if errors:
         fail("pre-render check: " + "; ".join(errors[:10]))
     placement = a.answers or S["answer_placement"]
-    page, total, sections = build_book_html(book, placement)
+    contents = not a.no_contents and S["book_contents"] != "never"
+    page, total, sections = build_book_html(book, placement, contents)
     out = Path(a.out).expanduser().resolve()
     out.parent.mkdir(parents=True, exist_ok=True)
     if out.exists():
@@ -1283,9 +1308,14 @@ def validate_job(body, settings):
         raise SettingsError("notes must be text of at most 4000 characters")
     if not isinstance(field, str) or len(field) > 100:
         raise SettingsError("field must be text of at most 100 characters")
+    mix = body.get("difficulty_mix", settings["difficulty_mix"])
+    error = validate_value(next(x for x in load_schema()["settings"] if x["key"] == "difficulty_mix"), mix)
+    if error:
+        raise SettingsError(error)
+    contents = {"always": True, "never": False}.get(settings["book_contents"], body.get("contents", True) is not False)
     return {"pdfs": pdfs, "format": body["format"], "mcq_options": body["mcq_options"],
             "answer_placement": body["answer_placement"], "merge": merge,
-            "notes": notes.strip(), "field": field.strip()}
+            "notes": notes.strip(), "field": field.strip(), "difficulty_mix": mix, "contents": contents}
 
 
 def submit_job(job):
@@ -1431,6 +1461,7 @@ def main():
     p.add_argument("--out", required=True); p.add_argument("--dpi", type=int, default=110)
     p.set_defaults(f=cmd_render_pages)
     p = sub.add_parser("plan"); p.add_argument("pdfs", nargs="+"); p.add_argument("--run")
+    p.add_argument("--mix")
     p.add_argument("--pages", action="append"); p.set_defaults(f=cmd_plan)
     p = sub.add_parser("check"); p.add_argument("json"); p.add_argument("--format", choices=list(FORMATS))
     p.add_argument("--expected", help="easy=2,medium=5,hard=3; separate alternatives with '|'")

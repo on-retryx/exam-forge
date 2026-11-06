@@ -483,6 +483,32 @@
 
   const getValue = (obj, key) => key.split(".").reduce((o, p) => (o ? o[p] : undefined), obj);
 
+  /* Moving one slider shares the difference between the other two, in 5% steps,
+     so the three always add up to 100%. */
+  function rebalance(mix, moved, to) {
+    const [a, b] = ["easy", "medium", "hard"].filter((k) => k !== moved), rest = 100 - to;
+    const weight = mix[a] + mix[b] ? mix[a] / (mix[a] + mix[b]) : 0.5;
+    const first = Math.min(rest, Math.round(rest * weight / 5) * 5);
+    return { [moved]: to, [a]: first, [b]: rest - first };
+  }
+
+  function mixSliders(value, onChange) {
+    const box = document.createElement("div"); box.className = "mix";
+    let mix = { easy: Math.round(value.easy * 100), medium: Math.round(value.medium * 100), hard: Math.round(value.hard * 100) };
+    const rows = {};
+    const show = () => Object.entries(rows).forEach(([k, r]) => { r.input.value = mix[k]; r.out.textContent = `%${mix[k]}`; });
+    ["easy", "medium", "hard"].forEach((k) => {
+      const l = document.createElement("label"), name = document.createElement("span"), out = document.createElement("output");
+      const i = document.createElement("input");
+      name.textContent = T(k); i.type = "range"; i.min = 0; i.max = 100; i.step = 5; i.setAttribute("aria-label", T(k));
+      i.oninput = () => { mix = rebalance(mix, k, +i.value); show(); };
+      i.onchange = () => onChange({ easy: mix.easy / 100, medium: mix.medium / 100, hard: mix.hard / 100 });
+      rows[k] = { input: i, out }; l.append(name, i, out); box.append(l);
+    });
+    show();
+    return box;
+  }
+
   function control(spec, value, onChange) {
     const id = "f-" + spec.key.replace(/\W/g, "-");
     if (spec.type === "enum") {
@@ -501,17 +527,7 @@
       const i = document.createElement("input"); i.type = "checkbox"; i.id = id; i.checked = !!value;
       i.onchange = () => onChange(i.checked); return i;
     }
-    if (spec.type === "mix") {
-      const box = document.createElement("div"); box.className = "mix";
-      const inputs = {};
-      ["easy", "medium", "hard"].forEach((k) => {
-        const l = document.createElement("label"); l.textContent = T(k);
-        const i = document.createElement("input"); i.type = "number"; i.step = "0.05"; i.min = 0; i.max = 1; i.value = value[k];
-        inputs[k] = i; l.append(i); box.append(l);
-        i.onchange = () => onChange({ easy: +inputs.easy.value, medium: +inputs.medium.value, hard: +inputs.hard.value });
-      });
-      return box;
-    }
+    if (spec.type === "mix") return mixSliders(value, onChange);
     if (spec.type === "json") {
       const t = document.createElement("textarea"); t.id = id; t.value = JSON.stringify(value, null, 1);
       t.onchange = () => { try { onChange(JSON.parse(t.value)); } catch (e) { onChange(null); } };
@@ -580,6 +596,9 @@
     $("job-answers").value = v.answer_placement;
     $("job-merge").checked = v.merge_books !== "never";
     $("job-field").value = v.field || "";
+    $("job-contents").checked = v.book_contents !== "never";
+    form.mix = v.difficulty_mix;
+    $("job-mix").replaceChildren(mixSliders(form.mix, (mix) => { form.mix = mix; }));
   }
 
   function renderJobOptions() {
@@ -603,6 +622,7 @@
     list.hidden = !form.pdfs.length;
     const fmt = $("job-format").value;
     $("job-options-row").hidden = fmt !== "mcq" && fmt !== "full-mix";
+    $("job-contents-row").hidden = !st.settings || st.settings.values.book_contents !== "ask";
     $("job-merge-row").hidden = form.pdfs.length < 2 || !st.settings || st.settings.values.merge_books !== "ask";
     $("job-session").textContent = form.session ? T("job_ready") : T("job_no_session");
     $("job-session").className = form.session ? "intro" : "intro warn";
@@ -803,6 +823,7 @@
       pdfs: form.pdfs, format: $("job-format").value, mcq_options: +$("job-options").value,
       answer_placement: $("job-answers").value, merge: $("job-merge").checked,
       notes: $("job-notes").value, field: $("job-field").value,
+      difficulty_mix: form.mix, contents: $("job-contents").checked,
     });
     if (!d.ok) { $("job-error").textContent = errorText(d.error); renderJob(); return; }
     form.pdfs = []; $("job-notes").value = ""; form.sentAt = Date.now();
