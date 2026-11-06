@@ -39,6 +39,7 @@ Settings: defaults in ../settings.json, then ~/.config/exam-forge/settings.json,
 then the file named by EXAM_FORGE_SETTINGS. Only the keys present are overridden.
 """
 import argparse
+import base64
 import datetime as dt
 import glob
 import html
@@ -1468,13 +1469,27 @@ def source_line(q, L):
             f'{L["page"]} {esc(s["page"])}')
 
 
-def question_html(no, q, L, inline):
+def figure_html(q, base):
+    """As a data URI: the book must stand alone, and the PDF printer never sees the run folder."""
+    fig = q["figure"]
+    try:
+        data = read_figure(fig, base)
+    except ValueError as e:
+        fail(f'{q["id"]}: {e}')
+    caption = esc(fig.get("caption", ""))
+    return (f'<figure class="q-figure"><img src="data:image/png;base64,{base64.b64encode(data).decode("ascii")}" '
+            f'alt="{caption or esc(fig["id"])}">' + (f"<figcaption>{caption}</figcaption>" if caption else "") + "</figure>")
+
+
+def question_html(no, q, L, inline, base="."):
     t = q["type"]
     parts = [f'<article class="question"><header><span class="no">{no}</span>'
              f'<span class="badge {q["difficulty"]}">{L[q["difficulty"]]}</span>'
              f'<span class="type">{L[t]}</span></header>']
     body = esc(q["question"]).replace("____", '<span class="blank"></span>')
     parts.append(f'<p class="stem">{body}</p>')
+    if q.get("figure"):
+        parts.append(figure_html(q, base))
     if t == "mcq":
         parts.append('<ol class="options">' + "".join(
             f'<li><b>{k})</b> {esc(q["options"][k])}</li>' for k in LETTERS if k in q["options"]) + "</ol>")
@@ -1510,7 +1525,7 @@ def format_date(iso, L):
     return L["date"].format(day=d.day, month=L["months"][d.month - 1], year=d.year)
 
 
-def build_book_html(book, placement, contents=True):
+def build_book_html(book, placement, contents=True, base="."):
     L = LABELS.get(book.get("language"), LABELS["en"])
     parts = book["parts"]
     multi = len(parts) > 1
@@ -1532,7 +1547,7 @@ def build_book_html(book, placement, contents=True):
             start = no
             cells, answers = [], []
             for q in qs:
-                cells.append(question_html(no, q, L, placement == "inline"))
+                cells.append(question_html(no, q, L, placement == "inline", base))
                 answers.append(answer_html(no, q, L))
                 no += 1
             toc.append(f'<li class="{"toc-sub" if multi else ""}"><span class="toc-no">{sec_no:02d}</span>'
@@ -1582,14 +1597,15 @@ def cmd_render(a):
     bad = [q["id"] for q in questions if not q.get("verified")]
     if bad:
         fail(f"unverified questions cannot enter a book: {bad}")
+    base = Path(a.json).expanduser().resolve().parent
     errors = []
     for q in questions:
-        errors += question_errors(q, book.get("format"))
+        errors += question_errors(q, book.get("format"), base=base)
     if errors:
         fail("pre-render check: " + "; ".join(errors[:10]))
     placement = a.answers or S["answer_placement"]
     contents = not a.no_contents and S["book_contents"] != "never"
-    page, total, sections = build_book_html(book, placement, contents)
+    page, total, sections = build_book_html(book, placement, contents, base)
     out = Path(a.out).expanduser().resolve()
     try:
         out.parent.mkdir(parents=True, exist_ok=True)
