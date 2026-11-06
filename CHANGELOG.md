@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.3.0] - 2026-11-06
 
 ### Added
 - New job form in the Studio: run `/exam-forge:exam-forge`, then choose PDFs and options, start the job, answer decisions and open the book from the browser
