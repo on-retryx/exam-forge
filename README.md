@@ -49,7 +49,17 @@ Or call it directly:
 /exam-forge:exam-forge ~/Courses/week3.pdf ~/Courses/week4.pdf
 ```
 
-Exam Forge asks for the format, where answers should go and, for several PDFs, whether to merge them. The book lands next to your PDF as `<name>-questions.pdf`.
+The Studio opens on a **New job** form. Choose your PDFs, the format, where answers should go and, for several PDFs, whether to merge them, then press **Start job**. Everything after that happens in the browser: you watch the team, answer any decision it needs, and open the finished book. PDFs and notes you gave the command are already filled in.
+
+The command works from a terminal too:
+
+```
+claude "/exam-forge:exam-forge"
+```
+
+The form needs that Claude Code session to stay open, because the session does the work; the Studio only hands it the job. When a job ends, the session waits for the next one, so you can keep going from the form. To answer in the chat instead, set `studio_job_form` to `false`.
+
+The book lands next to your PDF as `<name>-questions.pdf`.
 
 Try it with [`examples/water-cycle.pdf`](examples/water-cycle.pdf). [`examples/water-cycle-questions.pdf`](examples/water-cycle-questions.pdf) is a real output: one merged book from that note and its Turkish twin, 20 questions, with 7 of them rewritten after review.
 
@@ -156,13 +166,14 @@ They are stored in `~/.config/exam-forge/settings.json`.
 | `topic_change_round` / `max_rounds` | 4 / 6 | When a stuck question changes topic, and when you are asked |
 | `split_threshold` / `chunk_pages` | 25 / 20 | PDFs longer than this split into chunks of this size |
 | `studio_auto_open` / `studio_port` | true / 8765 | Studio behavior |
+| `studio_job_form` | true | Start jobs from the Studio form instead of the chat |
 | `studio_speech_bubbles` | true | Bots show their current task in the Studio |
 | `browser` | empty | Browser path for printing (or `EXAM_FORGE_BROWSER`) |
 | `pricing` | see file | USD per million tokens, used only for estimates |
 
 ## Privacy and copyright
 
-- Exam Forge reads only the files you give it. It does not search the web or use other sources.
+- Exam Forge reads only the files you give it. It does not search the web or use other sources. The job form uses your system's own file dialog (or a path you paste) and never lists your folders.
 - Your questions stay yours. The run folder sits next to your book, and nothing is copied elsewhere. Your PDFs are processed by Claude as usual in Claude Code.
 - Use only material you have the right to use. Questions include short quotes from the source.
 - The review catches most errors, but it is still AI. Use the book to study. Have a person check it before using it as an official exam.
@@ -183,4 +194,4 @@ claude --plugin-dir .
 
 ## Türkçe özet
 
-**Exam Forge**, ders notu PDF'lerinden yazdırılabilir soru kitabı üreten bir Claude Code eklentisidir. Her soru kaynak sayfa ve birebir alıntı taşır. Ayrı bir reviewer sayfaları kendisi açıp denetler, doğrulanmamış soru kitaba giremez. Sorular PDF'in dilinde yazılır; Türkçe kaynak Türkçe soru verir. Kitap etiketleri ve Studio arayüzü Türkçe de kullanılabilir. Cevaplar kitabın sonuna, sorunun altına ya da bölüm sonuna konabilir. Birden çok PDF tek kitapta birleştirilebilir. Tüm ayarlar Studio'dan ya da `/exam-forge:config` ile değişir. Kurulum: `/plugin install exam-forge --marketplace on-retryx/exam-forge`.
+**Exam Forge**, ders notu PDF'lerinden yazdırılabilir soru kitabı üreten bir Claude Code eklentisidir. Her soru kaynak sayfa ve birebir alıntı taşır. Ayrı bir reviewer sayfaları kendisi açıp denetler, doğrulanmamış soru kitaba giremez. Sorular PDF'in dilinde yazılır; Türkçe kaynak Türkçe soru verir. Kitap etiketleri ve Studio arayüzü Türkçe de kullanılabilir. Cevaplar kitabın sonuna, sorunun altına ya da bölüm sonuna konabilir. Birden çok PDF tek kitapta birleştirilebilir. `/exam-forge:exam-forge` Studio'da bir iş formu açar; PDF seçimi, ayarlar ve işin takibi tarayıcıdan yapılır, Claude Code oturumu ise açık kalır. Tüm ayarlar Studio'dan ya da `/exam-forge:config` ile değişir. Kurulum: `/plugin install exam-forge --marketplace on-retryx/exam-forge`.

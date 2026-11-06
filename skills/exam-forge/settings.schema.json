@@ -470,6 +470,19 @@
    }
   },
   {
+   "key": "studio_job_form",
+   "group": "advanced",
+   "type": "bool",
+   "label": {
+    "en": "Start jobs from the Studio",
+    "tr": "İşleri Studio'dan başlat"
+   },
+   "help": {
+    "en": "A job opens a form in the Studio instead of asking in the chat.",
+    "tr": "İş, soruları sohbette sormak yerine Studio'da bir form açar."
+   }
+  },
+  {
    "key": "studio_speech_bubbles",
    "group": "advanced",
    "type": "bool",

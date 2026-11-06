@@ -1,6 +1,6 @@
 ---
 name: exam-forge
-description: Turns lecture-note PDFs into a printable question book whose questions come only from those sources and have passed an independent review (multiple choice, open-ended, fill-in-the-blank, true/false). Use when the user asks to make a question book, practice exam or quiz from PDFs, write exam questions from lecture notes, or calls /exam-forge. Works with source material in any language.
+description: Turns lecture-note PDFs into a printable question book whose questions come only from those sources and have passed an independent review (multiple choice, open-ended, fill-in-the-blank, true/false). Takes the job from a form in the local Studio, or from the chat. Use when the user asks to make a question book, practice exam or quiz from PDFs, write exam questions from lecture notes, or calls /exam-forge. Works with source material in any language.
 argument-hint: "[PDF paths] [important notes]"
 ---
 
@@ -16,14 +16,31 @@ Constants:
 - **Progress marker:** every agent prompt starts with this exact line, which feeds the Studio: `EXAM_FORGE: run=<run>|pdf=<stem>|chunk=<N>|round=<K>`
 
 ## Invariants
-- **Input comes only from the user.** Use only PDFs given in this call. If none were given, ask; never search the disk for PDFs.
+- **Input comes only from the user.** Use only PDFs given in this call or chosen in the job form. If there are none, ask; never search the disk for PDFs.
 - **No extra sources.** Web, other files and model knowledge cannot enter question content.
 - **Unreviewed questions never enter a book.** `forge.py` enforces this; do not work around it.
 - **Privacy.** Questions are the user's study material. Unless asked, do not read output or run folders after the job, and do not copy question text elsewhere (notes, memory, logs).
 - **Copyright.** The user provides only material they may use. Do not turn questions into long verbatim copies of the source.
 
 ## 1. Input
-Extract PDF paths and notes from the arguments and attachments. Ask for what is missing in a single AskUserQuestion:
+Extract PDF paths and notes from the arguments and attachments.
+
+**Job form.** If `s.studio_job_form` is true and the user did not ask to answer in the chat, take the rest from the Studio, not from AskUserQuestion:
+```bash
+python3 "$FORGE" intake open --pdf "<pdf1>" --pdf "<pdf2>" --notes "<notes>"
+```
+Leave out `--pdf` and `--notes` when you have none: the user chooses PDFs in the form. It starts the Studio, opens the browser and prints `{"url": ...}`. Give the user that URL in one line. Then start the wait with the Bash tool's `run_in_background: true`, and end your turn without polling:
+```bash
+python3 "$FORGE" intake wait
+```
+When it exits, read its output:
+- **Exit 0:** the JSON is the job: `pdfs`, `format`, `mcq_options`, `answer_placement`, `merge` (true, false, or null for one PDF), `notes`, `field`. These replace every question below; ask nothing more and go to section 2. An empty `field` means no field. Remember that this job came from the form.
+- **Exit 5:** the user cancelled in the Studio. Say so in one line and stop.
+- **Exit 4:** the form timed out. Tell the user to run the command again, and stop.
+
+If background commands are not available, run `intake wait --timeout 540` in the foreground and repeat on exit 4. If `intake open` fails, continue in the chat.
+
+**In the chat** (the form is off, failed, or the user prefers it), ask for what is missing in a single AskUserQuestion:
 - **Format** (always ask): Multiple choice · Open-ended · Mixed (open + fill-in-the-blank + true/false) · Full mix (mixed + multiple choice). Values: `mcq`, `open`, `mixed`, `full-mix`. Options per question: `s.mcq_options` (4 or 5), unless the user wants otherwise.
 - **Answer placement** (unless the user already said): `s.answer_placement` first as the recommended option. Values: `book_end`, `inline`, `section_end`.
 - **Merge** (only with two or more PDFs and `s.merge_books` = `ask`): one combined book, or one book per PDF. With `always` or `never`, do not ask.
@@ -38,7 +55,7 @@ python3 "$FORGE" plan "<pdf1>" "<pdf2>" ...
 ```
 This creates the run folder (`plan.run`, under `<output>/.exam-forge/<timestamp>/`), with one subfolder per PDF named by its stem. Page counts that cannot be read: open the PDF with Read and pass `--pages "name.pdf=N"`.
 
-**Studio:** if `s.studio_auto_open` is true, start it in the background and give the user the URL it prints. It is optional, so continue if it fails:
+**Studio:** if the job came from the form it is already open; skip this. Otherwise, if `s.studio_auto_open` is true, start it in the background and give the user the URL it prints. It is optional, so continue if it fails:
 ```bash
 nohup python3 "$FORGE" studio > "<run>/studio.log" 2>&1 &
 ```
@@ -65,6 +82,12 @@ For failures from any layer:
 3. Screen those ids again. Then, to review them, get the pages with `python3 "$FORGE" source-pages <chunk> --ids a,b`, and give the reviewer only those ids and those pages. Never send a whole chunk back for review; repeating pages is the main cost. Output `review-N-round(K+1).json`, then `approve`.
 4. Repeat until nothing fails. After `s.topic_change_round` rounds, have the editor choose **a different topic** in the same page range (same difficulty and type). After `s.max_rounds`, ask the user: drop that question and print a shorter book, or continue. Never print a shorter book without approval.
 
+**Decisions on a form job.** The user is watching the Studio, not the chat, so every question during the job goes there, including this one and the page tool install above. Start this with `run_in_background: true` and keep working on other chunks:
+```bash
+python3 "$FORGE" ask "<run>" --id "<unique-id>" --text "<question in the user's language>" --option "drop=Drop it" --option "continue=Keep trying"
+```
+It prints the chosen value and exits 0; exit 4 means nobody answered in time, so ask in the chat. Never put question text in `--text`: the Studio does not show questions. Refer to them by chunk and count.
+
 Chunks may be at different stages. On each notification, take only that chunk's next step. Tell the user the chunk and round in a short status line.
 
 ## 6. Merge and print
@@ -81,3 +104,5 @@ python3 "$FORGE" render "<run>/book-<name>.json" "<output>/<name>-questions.pdf"
 
 ## 7. Close
 Report for each book: output path, question count, difficulty split, how many questions were rewritten in how many rounds, any thin-page reduction and its reason, any unreadable pages. Add the subagent cost from `python3 "$FORGE" cost "<run>"`. Keep the run folder; the user can delete it.
+
+If the job came from the form, start `intake wait` in the background again and end your turn, so the next job can start from the Studio. Handle its exit as in section 1, except that on exit 4 or 5 you say nothing more than one line.

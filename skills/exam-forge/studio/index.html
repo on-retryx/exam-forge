@@ -12,6 +12,7 @@
   <div class="brand"><span class="logo" aria-hidden="true"></span><h1>EXAM FORGE <em>STUDIO</em></h1></div>
   <nav class="tabs" role="tablist">
     <button role="tab" data-tab="office" aria-selected="true" data-i18n="tab_office"></button>
+    <button role="tab" data-tab="job" aria-selected="false" data-i18n="tab_job"></button>
     <button role="tab" data-tab="settings" aria-selected="false" data-i18n="tab_settings"></button>
   </nav>
   <div class="tools">
@@ -44,9 +45,44 @@
         <div><dt data-i18n="stat_cost"></dt><dd id="s-cost">–</dd></div>
       </dl>
     </div>
+    <div id="books-box" class="books" hidden><h2 data-i18n="books"></h2><ul id="books"></ul></div>
     <div class="team"><h2 data-i18n="team"></h2><ul id="team"></ul></div>
     <div class="feed"><h2 data-i18n="updates"></h2><ol id="feed" aria-live="polite"></ol></div>
   </aside>
+</main>
+
+<main id="job-tab" hidden>
+  <p id="job-session" class="intro" role="status"></p>
+  <form id="job" autocomplete="off">
+    <fieldset>
+      <legend data-i18n="job_sources"></legend>
+      <div class="field wide">
+        <ul id="job-pdfs"></ul>
+        <div class="job-add">
+          <button type="button" id="job-pick" class="chip primary" data-i18n="job_pick"></button>
+          <input type="text" id="job-path" data-i18n-label="job_path" placeholder="~/Courses/week3.pdf">
+          <button type="button" id="job-path-add" class="chip" data-i18n="job_add"></button>
+        </div>
+      </div>
+    </fieldset>
+    <fieldset>
+      <legend data-i18n="job_book"></legend>
+      <div class="field"><div><label for="job-format" data-i18n="job_format"></label></div><div class="control"><select id="job-format"></select></div></div>
+      <div class="field" id="job-options-row"><div><label for="job-options" data-i18n="job_options"></label></div><div class="control"><select id="job-options"></select></div></div>
+      <div class="field"><div><label for="job-answers" data-i18n="job_answers"></label></div><div class="control"><select id="job-answers"></select></div></div>
+      <div class="field" id="job-merge-row"><div><label for="job-merge" data-i18n="job_merge"></label><p data-i18n="job_merge_help"></p></div><div class="control"><input type="checkbox" id="job-merge"></div></div>
+    </fieldset>
+    <fieldset>
+      <legend data-i18n="job_guidance"></legend>
+      <div class="field"><div><label for="job-notes" data-i18n="job_notes"></label><p data-i18n="job_notes_help"></p></div><div class="control"><textarea id="job-notes" maxlength="4000"></textarea></div></div>
+      <div class="field"><div><label for="job-field" data-i18n="job_field"></label><p data-i18n="job_field_help"></p></div><div class="control"><input type="text" id="job-field" maxlength="100"></div></div>
+    </fieldset>
+    <div class="job-actions">
+      <p id="job-error" class="err" role="alert"></p>
+      <button type="button" id="job-cancel" class="chip" data-i18n="job_cancel"></button>
+      <button type="submit" id="job-start" class="chip primary" data-i18n="job_start"></button>
+    </div>
+  </form>
 </main>
 
 <main id="settings-tab" hidden>
@@ -84,6 +120,13 @@
       </footer>
     </section>
   </div>
+</dialog>
+
+<dialog id="ask" aria-labelledby="ask-text">
+  <h2 data-i18n="ask_title"></h2>
+  <p id="ask-text"></p>
+  <div id="ask-options"></div>
+  <p id="ask-error" class="err" role="alert"></p>
 </dialog>
 
 <script src="/i18n.js"></script>

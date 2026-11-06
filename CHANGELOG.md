@@ -1,5 +1,15 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- New job form in the Studio: run `/exam-forge:exam-forge`, then choose PDFs and options, start the job, answer decisions and open the book from the browser
+- `forge.py intake` and `forge.py ask`, which connect a waiting Claude Code session to the form
+- `studio_job_form` setting; set it to `false` to keep answering in the chat
+
+### Changed
+- With the form on, the skill no longer asks setup questions in the chat
+
 ## [0.2.0] - 2026-11-06
 
 Renamed from soru-kitabi to Exam Forge and rebuilt for a global audience.

@@ -20,7 +20,7 @@
   let demoTimer = null;
 
   function freshJob() {
-    return { team: {}, chunks: {}, order: [], plan: 0, rewrites: 0, feed: [], phase: "phase_idle", cost: null, title: "" };
+    return { team: {}, chunks: {}, order: [], plan: 0, rewrites: 0, feed: [], phase: "phase_idle", cost: null, title: "", books: [] };
   }
 
   const T = (k) => I18N[st.lang][k] ?? k;
@@ -156,7 +156,14 @@
         job.phase = "phase_done";
         setTask(office.chief, "task_done", {});
         post(e, { key: "ev_render", data: { name: String(e.out || "").split(/[\\/]/).pop() }, tone: "good" }, office.chief);
+        if (e.out) job.books.push({ out: e.out, pdf: !e.html_only });
         if (anim) { office.printing = 3; office.float(Office.spots.PRINTER.x, 30, T("printed"), "#22c55e"); office.cheerAll(T("say_printed")); }
+        break;
+      case "ask":
+        post(e, { key: "ev_ask", data: {} }, office.chief);
+        break;
+      case "answer":
+        post(e, { key: "ev_answer", data: {} }, office.chief);
         break;
     }
   }
@@ -201,9 +208,22 @@
       span.textContent = entryText(f);
       li.append(time, span); feed.append(li);
     });
+    const books = st.mode === "demo" ? [] : job.books;
+    $("books-box").hidden = !books.length;
+    $("books").innerHTML = "";
+    books.forEach((b, i) => {
+      const li = document.createElement("li"), path = document.createElement("span");
+      path.textContent = b.out; li.append(path);
+      if (b.pdf) {
+        const a = document.createElement("a");
+        a.href = `/book?run=${st.runId}&n=${i}`; a.target = "_blank"; a.rel = "noopener"; a.className = "chip"; a.textContent = T("open_book");
+        li.append(a);
+      }
+      $("books").append(li);
+    });
     const banner = $("banner");
     banner.hidden = false;
-    banner.textContent = st.mode === "demo" ? T("demo_banner") : st.mode === "live" ? T("live_banner") : T("past_banner");
+    banner.textContent = T({ demo: "demo_banner", live: "live_banner", waiting: "job_sent" }[st.mode] || "past_banner");
   }
 
   function renderRunSelect() {
@@ -224,8 +244,12 @@
     });
     $("office").setAttribute("aria-label", T("canvas_label"));
     office.labels = { pass: T("pass"), fail: T("fail"), printed: T("printed") };
+    document.querySelectorAll("[data-i18n-label]").forEach((n) => { n.setAttribute("aria-label", T(n.dataset.i18nLabel)); });
     renderRunSelect();
     renderSettings();
+    renderJobOptions();
+    jobDefaults();
+    renderJob();
     render();
   }
 
@@ -367,6 +391,11 @@
       if (st.selected === "auto") {
         const r = st.runs[0];
         if (r && isActive(r)) { if (st.runId !== r.id || st.mode !== "live") await loadRun(r.id, "live"); }
+        else if (r && r.id === st.runId && (st.mode === "live" || st.mode === "past")) {
+          /* A finished job stays on screen so its book can be opened; later books refresh it. */
+          if (st.mode === "live" || st.seen !== r.last) { st.seen = r.last; await loadRun(r.id, "past"); }
+        }
+        else if (st.mode === "waiting" && Date.now() - form.sentAt < SENT_MS) { /* the session is planning */ }
         else if (st.mode !== "demo") startDemo();
       }
     } catch (e) { /* server gone */ }
@@ -526,6 +555,135 @@
     });
   }
 
+  /* ---------- job form ---------- */
+  const SENT_MS = 3 * 60 * 1000;
+  const FORMATS = ["mcq", "open", "mixed", "full-mix"];
+  const form = { pdfs: [], requestId: null, session: false, picker: false, askId: null, sentAt: 0, ready: false };
+  const postJson = (u, body) => fetch(u, {
+    method: "POST", headers: { "Content-Type": "application/json", "X-Forge-Token": TOKEN }, body: JSON.stringify(body),
+  }).then((r) => r.json());
+  const errorText = (e) => (I18N[st.lang]["err_" + e] ?? e);
+
+  function setOptions(sel, entries) {
+    const keep = sel.value;
+    sel.innerHTML = "";
+    entries.forEach(([v, label]) => { const o = document.createElement("option"); o.value = v; o.textContent = label; sel.append(o); });
+    if (keep && entries.some(([v]) => v === keep)) sel.value = keep;
+  }
+
+  function jobDefaults() {
+    if (form.ready || !st.settings) return;
+    form.ready = true;
+    const v = st.settings.values;
+    renderJobOptions();
+    $("job-options").value = String(v.mcq_options);
+    $("job-answers").value = v.answer_placement;
+    $("job-merge").checked = v.merge_books !== "never";
+    $("job-field").value = v.field || "";
+  }
+
+  function renderJobOptions() {
+    setOptions($("job-format"), FORMATS.map((f) => [f, T("fmt_" + f)]));
+    setOptions($("job-options"), [["4", "4"], ["5", "5"]]);
+    const spec = st.settings && st.settings.schema.settings.find((s) => s.key === "answer_placement");
+    if (spec) setOptions($("job-answers"), spec.values.map((v) => [v, spec.value_labels[st.lang][v]]));
+  }
+
+  function renderJob() {
+    const list = $("job-pdfs");
+    list.innerHTML = "";
+    form.pdfs.forEach((path) => {
+      const li = document.createElement("li"), span = document.createElement("span"), rm = document.createElement("button");
+      span.textContent = path; rm.type = "button"; rm.className = "chip"; rm.textContent = T("job_remove");
+      rm.onclick = () => { form.pdfs = form.pdfs.filter((p) => p !== path); $("job-error").textContent = ""; renderJob(); };
+      li.append(span, rm); list.append(li);
+    });
+    list.hidden = !form.pdfs.length;
+    $("job-pick").hidden = !form.picker;
+    const fmt = $("job-format").value;
+    $("job-options-row").hidden = fmt !== "mcq" && fmt !== "full-mix";
+    $("job-merge-row").hidden = form.pdfs.length < 2 || !st.settings || st.settings.values.merge_books !== "ask";
+    $("job-session").textContent = form.session ? T("job_ready") : T("job_no_session");
+    $("job-session").className = form.session ? "intro" : "intro warn";
+    $("job-start").disabled = !form.session || !form.pdfs.length;
+    $("job-cancel").hidden = !form.session;
+  }
+
+  function addPdfs(paths) {
+    paths.forEach((p) => { if (p && !form.pdfs.includes(p)) form.pdfs.push(p); });
+    $("job-error").textContent = "";
+    renderJob();
+  }
+
+  function showAsk(ask) {
+    const dlgAsk = $("ask");
+    if (!ask) { form.askId = null; if (dlgAsk.open) dlgAsk.close(); return; }
+    if (form.askId === ask.id) return;
+    form.askId = ask.id;
+    $("ask-text").textContent = ask.text;
+    $("ask-error").textContent = "";
+    const box = $("ask-options");
+    box.innerHTML = "";
+    ask.options.forEach((o, i) => {
+      const b = document.createElement("button");
+      b.type = "button"; b.className = i ? "chip" : "chip primary"; b.textContent = o.label;
+      b.onclick = async () => {
+        const d = await postJson("/api/answer", { run: ask.run, id: ask.id, value: o.value });
+        if (d.ok) dlgAsk.close(); else $("ask-error").textContent = d.error;
+      };
+      box.append(b);
+    });
+    dlgAsk.showModal();
+  }
+
+  async function pollIntake() {
+    try {
+      const d = await getJson("/api/intake");
+      form.session = d.session; form.picker = d.picker;
+      if (d.request && d.request.id !== form.requestId) {
+        form.requestId = d.request.id;
+        form.pdfs = d.request.pdfs.slice();
+        $("job-notes").value = d.request.notes || "";
+      }
+      renderJob();
+      showAsk(d.ask);
+    } catch (e) { /* server gone */ }
+  }
+
+  $("job-format").onchange = renderJob;
+  $("ask").addEventListener("cancel", (ev) => ev.preventDefault());
+  $("job-pick").onclick = async () => {
+    $("job-error").textContent = "";
+    $("job-pick").disabled = true;
+    try {
+      const d = await postJson("/api/pick", {});
+      if (d.ok) addPdfs(d.pdfs); else $("job-error").textContent = errorText(d.error);
+    } finally { $("job-pick").disabled = false; }
+  };
+  $("job-path-add").onclick = () => { addPdfs([$("job-path").value.trim()]); $("job-path").value = ""; };
+  $("job-path").addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter") { ev.preventDefault(); $("job-path-add").click(); }
+  });
+  $("job-cancel").onclick = async () => {
+    const d = await postJson("/api/cancel", {});
+    if (d.ok) { form.pdfs = []; $("job-notes").value = ""; await pollIntake(); } else $("job-error").textContent = errorText(d.error);
+  };
+  $("job").onsubmit = async (ev) => {
+    ev.preventDefault();
+    $("job-error").textContent = "";
+    $("job-start").disabled = true;
+    const d = await postJson("/api/jobs", {
+      pdfs: form.pdfs, format: $("job-format").value, mcq_options: +$("job-options").value,
+      answer_placement: $("job-answers").value, merge: $("job-merge").checked,
+      notes: $("job-notes").value, field: $("job-field").value,
+    });
+    if (!d.ok) { $("job-error").textContent = errorText(d.error); renderJob(); return; }
+    form.pdfs = []; $("job-notes").value = ""; form.sentAt = Date.now();
+    stopDemo(); job = freshJob(); job.phase = "phase_plan";
+    st.mode = "waiting"; st.selected = "auto"; st.runId = null;
+    renderRunSelect(); render(); renderJob(); showTab("office");
+  };
+
   /* ---------- wiring ---------- */
   function applyTheme() {
     const root = document.documentElement;
@@ -535,13 +693,13 @@
   }
   matchMedia("(prefers-color-scheme: dark)").addEventListener("change", applyTheme);
 
-  document.querySelectorAll("[data-tab]").forEach((b) => {
-    b.onclick = () => {
-      document.querySelectorAll("[data-tab]").forEach((x) => x.setAttribute("aria-selected", String(x === b)));
-      $("office-tab").hidden = b.dataset.tab !== "office";
-      $("settings-tab").hidden = b.dataset.tab !== "settings";
-    };
-  });
+  function showTab(name) {
+    document.querySelectorAll("[data-tab]").forEach((x) => {
+      x.setAttribute("aria-selected", String(x.dataset.tab === name));
+      $(x.dataset.tab + "-tab").hidden = x.dataset.tab !== name;
+    });
+  }
+  document.querySelectorAll("[data-tab]").forEach((b) => { b.onclick = () => showTab(b.dataset.tab); });
   $("lang").onclick = () => { st.lang = st.lang === "tr" ? "en" : "tr"; store.set("forge.lang", st.lang); applyStaticText(); };
   document.querySelectorAll("[data-theme-choice]").forEach((b) => {
     b.onclick = () => { st.theme = b.dataset.themeChoice; store.set("forge.theme", st.theme); applyTheme(); applyStaticText(); };
@@ -557,10 +715,13 @@
     applyTheme();
     try { st.settings = await getJson("/api/settings"); office.speech = st.settings.values.studio_speech_bubbles; } catch (e) { /* shown empty */ }
     applyStaticText();
+    await pollIntake();
+    if (url.get("tab") === "job") showTab("job");
     await pollRuns();
     if (st.mode === "demo" && !demoTimer) startDemo();
     setInterval(pollEvents, 1500);
     setInterval(pollRuns, 5000);
+    setInterval(pollIntake, 2000);
     setInterval(refreshCost, 20000);
   })();
 })();

@@ -23,6 +23,9 @@ Commands:
   event <run> <type> [key=value ...]    Append an event by hand (hook fallback)
   cost <run>                            Tokens and estimated cost from transcripts
   studio [--port N] [--no-open]         Start the local office view
+  intake open [--pdf P ...] [--notes T]  Open the job form in the Studio
+  intake wait [--timeout S]             Wait for a job from the form (exit 4 timeout, 5 cancelled)
+  ask <run> --id I --text T --option v=Label ...  Ask in the Studio; prints the value
 
 Settings: defaults in ../settings.json, then ~/.config/exam-forge/settings.json,
 then the file named by EXAM_FORGE_SETTINGS. Only the keys present are overridden.
@@ -39,6 +42,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
+import webbrowser
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -1115,6 +1120,225 @@ def cmd_studio(a):
     server.main(port=a.port or S["studio_port"], open_browser=not a.no_open)
 
 
+# ---------- job form ----------
+# The Studio cannot run agents. A Claude Code session waits here, the browser hands
+# it a job through these files, and everything after that runs as usual.
+FRESH_SECONDS = 10
+ASK_POLL_SECONDS = 1
+
+
+def intake_dir():
+    return config_dir() / "intake"
+
+
+def write_atomic(path, data):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def is_fresh(path):
+    try:
+        return time.time() - path.stat().st_mtime < FRESH_SECONDS
+    except OSError:
+        return False
+
+
+def read_quiet(path):
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def remove_quiet(path):
+    try:
+        path.unlink()
+    except OSError:
+        pass
+
+
+def session_waiting():
+    return is_fresh(intake_dir() / "waiter.json")
+
+
+def intake_request():
+    return read_quiet(intake_dir() / "request.json")
+
+
+def validate_pdf(raw):
+    """Absolute path of a real PDF file, or a SettingsError naming what is wrong."""
+    if not isinstance(raw, str) or not raw.strip():
+        raise SettingsError("empty PDF path")
+    pdf = Path(raw.strip()).expanduser().resolve()
+    if not pdf.is_file():
+        raise SettingsError(f"file not found: {pdf}")
+    with open(pdf, "rb") as f:
+        if f.read(5) != b"%PDF-":
+            raise SettingsError(f"not a PDF: {pdf.name}")
+    return str(pdf)
+
+
+def validate_job(body, settings):
+    """Clean a job from the form. Only known fields survive."""
+    if not isinstance(body, dict):
+        raise SettingsError("job must be an object")
+    raw = body.get("pdfs")
+    if not isinstance(raw, list) or not raw:
+        raise SettingsError("choose at least one PDF")
+    pdfs = [validate_pdf(p) for p in raw]
+    if len(set(pdfs)) != len(pdfs):
+        raise SettingsError("the same PDF was added twice")
+    stems = [Path(p).stem for p in pdfs]
+    if len(set(stems)) != len(stems):
+        raise SettingsError("two PDFs share a name; their output would collide")
+    if body.get("format") not in FORMATS:
+        raise SettingsError(f"unknown format: {body.get('format')}")
+    if body.get("mcq_options") not in (4, 5):
+        raise SettingsError("options per question must be 4 or 5")
+    if body.get("answer_placement") not in ("book_end", "inline", "section_end"):
+        raise SettingsError(f"unknown answer placement: {body.get('answer_placement')}")
+    merge = None
+    if len(pdfs) > 1:
+        fixed = {"always": True, "never": False}.get(settings["merge_books"])
+        merge = bool(body.get("merge")) if fixed is None else fixed
+    notes, field = body.get("notes", ""), body.get("field", "")
+    if not isinstance(notes, str) or len(notes) > 4000:
+        raise SettingsError("notes must be text of at most 4000 characters")
+    if not isinstance(field, str) or len(field) > 100:
+        raise SettingsError("field must be text of at most 100 characters")
+    return {"pdfs": pdfs, "format": body["format"], "mcq_options": body["mcq_options"],
+            "answer_placement": body["answer_placement"], "merge": merge,
+            "notes": notes.strip(), "field": field.strip()}
+
+
+def submit_job(job):
+    write_atomic(intake_dir() / "job.json", job)
+
+
+def cancel_job():
+    write_atomic(intake_dir() / "cancel.json", {"t": now_iso()})
+
+
+def ensure_studio():
+    """URL of a running Studio, starting one in the background when needed."""
+    sys.path.insert(0, str(ROOT / "studio"))
+    import server
+    port = S["studio_port"]
+    url = f"http://127.0.0.1:{port}"
+    if server.is_studio(port):
+        return url
+    log = config_dir() / "studio.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    with open(log, "w", encoding="utf-8") as out:
+        subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "studio", "--no-open"],
+                         stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT,
+                         start_new_session=True)
+    for _ in range(50):
+        time.sleep(0.1)
+        m = re.search(r"http://127\.0\.0\.1:(\d+)", log.read_text(encoding="utf-8"))
+        if m and server.is_studio(int(m.group(1))):
+            return m.group(0)
+    fail(f"Studio did not start; see {log}")
+
+
+def intake_open(a):
+    box = intake_dir()
+    for name in ("job.json", "cancel.json"):
+        remove_quiet(box / name)
+    pdfs = []
+    for raw in a.pdf or []:
+        try:
+            pdfs.append(validate_pdf(raw))
+        except SettingsError as e:
+            fail(str(e))
+    write_atomic(box / "request.json", {"id": os.urandom(6).hex(), "t": now_iso(), "pdfs": pdfs,
+                                        "notes": a.notes or ""})
+    url = ensure_studio() + "/?tab=job"
+    if S["studio_auto_open"] and not a.no_open:
+        webbrowser.open(url)
+    print(json.dumps({"url": url}))
+
+
+def intake_wait(a):
+    box = intake_dir()
+    waiter, job_file, cancel = box / "waiter.json", box / "job.json", box / "cancel.json"
+    deadline = time.time() + a.timeout
+    try:
+        while time.time() < deadline:
+            write_atomic(waiter, {"pid": os.getpid()})
+            if cancel.exists():
+                remove_quiet(cancel)
+                print('{"cancelled": true}')
+                sys.exit(5)
+            claimed = box / f".claimed.{os.getpid()}"
+            try:
+                os.replace(job_file, claimed)
+            except OSError:
+                time.sleep(ASK_POLL_SECONDS)
+                continue
+            print(claimed.read_text(encoding="utf-8"))
+            remove_quiet(claimed)
+            remove_quiet(box / "request.json")
+            return
+    finally:
+        remove_quiet(waiter)
+    print('{"timeout": true}')
+    sys.exit(4)
+
+
+def cmd_intake(a):
+    (intake_open if a.action == "open" else intake_wait)(a)
+
+
+def pending_ask(run):
+    """The open question of a run, if the session is still waiting for its answer."""
+    p = Path(run) / "ask.json"
+    return read_quiet(p) if is_fresh(p) else None
+
+
+def answer_ask(run, ask_id, value):
+    ask = pending_ask(run)
+    if not ask or ask["id"] != ask_id:
+        raise SettingsError("this question is no longer open")
+    if value not in [o["value"] for o in ask["options"]]:
+        raise SettingsError(f"unknown answer: {value}")
+    write_atomic(Path(run) / "answer.json", {"id": ask_id, "value": value})
+
+
+def cmd_ask(a):
+    """Ask the person watching the Studio a question and print the chosen value."""
+    run = Path(a.run).expanduser().resolve()
+    if not (run / "plan.json").is_file():
+        fail(f"not a run folder: {run}")
+    options = []
+    for raw in a.option:
+        value, sep, label = raw.partition("=")
+        if not (sep and value and label):
+            fail(f"option must look like value=Label: {raw}")
+        options.append({"value": value, "label": label})
+    ask_file, answer_file = run / "ask.json", run / "answer.json"
+    remove_quiet(answer_file)
+    write_atomic(ask_file, {"id": a.id, "text": a.text, "options": options})
+    emit(run, "ask", text=a.text)
+    deadline = time.time() + a.timeout
+    try:
+        while time.time() < deadline:
+            os.utime(ask_file)
+            answer = read_quiet(answer_file)
+            if answer and answer.get("id") == a.id:
+                emit(run, "answer", value=answer["value"])
+                print(answer["value"])
+                return
+            time.sleep(ASK_POLL_SECONDS)
+    finally:
+        remove_quiet(ask_file)
+        remove_quiet(answer_file)
+    print("timeout", file=sys.stderr)
+    sys.exit(4)
+
+
 # ---------- cli ----------
 def main():
     global S
@@ -1162,6 +1386,13 @@ def main():
     p = sub.add_parser("cost"); p.add_argument("run"); p.set_defaults(f=cmd_cost)
     p = sub.add_parser("studio"); p.add_argument("--port", type=int); p.add_argument("--no-open", action="store_true")
     p.set_defaults(f=cmd_studio)
+    p = sub.add_parser("intake"); p.add_argument("action", choices=["open", "wait"])
+    p.add_argument("--pdf", action="append"); p.add_argument("--notes")
+    p.add_argument("--no-open", action="store_true"); p.add_argument("--timeout", type=int, default=7200)
+    p.set_defaults(f=cmd_intake)
+    p = sub.add_parser("ask"); p.add_argument("run"); p.add_argument("--id", required=True)
+    p.add_argument("--text", required=True); p.add_argument("--option", action="append", required=True)
+    p.add_argument("--timeout", type=int, default=7200); p.set_defaults(f=cmd_ask)
     a = ap.parse_args()
     try:
         S = load_settings()
