@@ -166,6 +166,15 @@ class Notes(Base):
                 red = sum(1 for i in range(0, len(s), step) if s[i] > 200 and s[i + 1] < 100)
                 self.assertGreater(red, 100)
 
+    def test_crop_on_a_trimmed_page_shows_the_ink(self):
+        def build(d):
+            ink(d[0])
+            d[0].set_cropbox(pymupdf.Rect(50, 60, 500, 700))
+        n = self.notes(self.pdf(build))["notes"][0]
+        pix = pymupdf.Pixmap(n["file"])
+        s, step = pix.samples, pix.n
+        self.assertGreater(sum(1 for i in range(0, len(s), step) if s[i] > 200 and s[i + 1] < 100), 100)
+
     def test_ids_number_the_notes_of_each_page_from_the_top(self):
         def build(d):
             d[0].add_freetext_annot((100, 500, 300, 550), "lower")

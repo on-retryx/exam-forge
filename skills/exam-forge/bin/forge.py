@@ -7,6 +7,7 @@ Commands:
   team                                  Print the resolved team and models
   pages <pdf>                           Page count
   render-pages <pdf> <3-12> --out DIR   Rasterize pages to PNG (pymupdf or pdftoppm)
+  notes <pdf> <3-12> --out DIR          List note annotations; crops ink to PNG (needs pymupdf)
   plan <pdf>... [--run DIR]             Question counts, difficulty split, chunks
        [--mix 0.2,0.5,0.3]              difficulty shares for this job
        [--team editor=sonnet,...] [--effort editor=high,...] [--budget usd=5]
@@ -760,6 +761,81 @@ def cmd_render_pages(a):
         return
     print("ERROR: no page image tool found. Run: forge.py doctor --install pdf_tool", file=sys.stderr)
     sys.exit(4)
+
+
+NOTE_KINDS = {"Ink": "ink", "FreeText": "freetext", "Text": "text"}
+NOTE_MARGIN = 12  # points around a crop; ink closer than this counts as one piece of writing
+
+
+def join_ink(rects, fitz):
+    """Many apps save every stroke as its own annotation, and a word only reads in one piece."""
+    groups = []
+    for rect in rects:
+        grown = rect + (-NOTE_MARGIN, -NOTE_MARGIN, NOTE_MARGIN, NOTE_MARGIN)
+        near = [g for g in groups if g.intersects(grown)]
+        groups = [g for g in groups if not g.intersects(grown)]
+        for g in near:
+            rect = rect | g
+        groups.append(fitz.Rect(rect))
+    return groups
+
+
+def page_notes(page, fitz, target, dpi):
+    """The notes of one page, top to bottom. Annotations keep unrotated coordinates and a crop
+    takes the ones shown, so every rect goes through the page's rotation first."""
+    typed, ink = [], []
+    for annot in page.annots() or []:
+        kind = NOTE_KINDS.get(annot.type[1])
+        rect = annot.rect * page.rotation_matrix
+        if not kind or annot.flags & fitz.PDF_ANNOT_IS_HIDDEN or not rect.intersects(page.rect):
+            continue
+        if kind == "ink":
+            ink.append(rect)
+        elif annot.info["content"].strip():
+            typed.append((rect, {"kind": kind, "text": annot.info["content"].strip()}))
+    found = typed + [(rect, {"kind": "ink"}) for rect in join_ink(ink, fitz)]
+    notes = []
+    for n, (rect, note) in enumerate(sorted(found, key=lambda x: (x[0].y0, x[0].x0)), 1):
+        id_ = f"note-p{page.number + 1}-{n}"
+        note = {"id": id_, "page": page.number + 1, "bbox": [round(v, 1) for v in rect], **note}
+        if note["kind"] == "ink":
+            path = target / f"{id_}.png"
+            clip = (rect + (-NOTE_MARGIN, -NOTE_MARGIN, NOTE_MARGIN, NOTE_MARGIN)) & page.rect
+            page.get_pixmap(clip=clip, dpi=dpi).save(str(path))
+            note["file"] = str(path)
+        notes.append(note)
+    return notes
+
+
+def cmd_notes(a):
+    """Annotations only: handwriting drawn into a scanned page has none, so pages are still read as images."""
+    pdf = Path(a.pdf).expanduser().resolve()
+    m = re.fullmatch(r"(\d+)(?:-(\d+))?", a.range)
+    if not m:
+        fail("range must look like '3' or '3-12'")
+    first, last = int(m.group(1)), int(m.group(2) or m.group(1))
+    if first < 1 or last < first:
+        fail("range must count up from page 1")
+    fitz = load_fitz()
+    if not fitz:
+        print("ERROR: no page image tool found. Run: forge.py doctor --install pdf_tool", file=sys.stderr)
+        sys.exit(4)
+    try:
+        doc = fitz.open(str(pdf))
+    except Exception as e:
+        fail(f"could not open {pdf}: {e}")
+    with doc:
+        if doc.needs_pass:
+            fail(f"{pdf.name} is locked with a password")
+        if first > doc.page_count:
+            fail(f"{pdf.name} has only {doc.page_count} pages")
+        target = Path(a.out).expanduser().resolve()
+        target.mkdir(parents=True, exist_ok=True)
+        notes = []
+        for i in range(first, min(last, doc.page_count) + 1):
+            notes += page_notes(doc[i - 1], fitz, target, a.dpi)
+    print(json.dumps({"notes": notes, "pages_with_notes": sorted({n["page"] for n in notes})},
+                     ensure_ascii=False, indent=2))
 
 
 # ---------- plan ----------
@@ -2221,6 +2297,9 @@ def main():
     p = sub.add_parser("render-pages"); p.add_argument("pdf"); p.add_argument("range")
     p.add_argument("--out", required=True); p.add_argument("--dpi", type=int, default=110)
     p.set_defaults(f=cmd_render_pages)
+    p = sub.add_parser("notes"); p.add_argument("pdf"); p.add_argument("range")
+    p.add_argument("--out", required=True); p.add_argument("--dpi", type=int, default=200)
+    p.set_defaults(f=cmd_notes)
     p = sub.add_parser("plan"); p.add_argument("pdfs", nargs="+"); p.add_argument("--run")
     p.add_argument("--mix"); p.add_argument("--team"); p.add_argument("--effort"); p.add_argument("--budget")
     p.add_argument("--pages", action="append"); p.set_defaults(f=cmd_plan)
