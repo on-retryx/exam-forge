@@ -336,6 +336,23 @@ class DrawnLines(Case):
             p.draw_line((a.x0, y + 1.5), (b.x1, y + 1.5), color=(0, 0, 0), width=0.8)
         self.assertEqual(self.only(build)["kind"], "underline")
 
+    def test_styles_from_another_layout_engine(self):
+        """MuPDF's HTML layout places these lines itself, so nothing here depends on the helpers above."""
+        @blank
+        def build(p):
+            p.insert_htmlbox(fitz.Rect(60, 60, 520, 400), (
+                '<p style="font-size:13pt">Plain <u>first underlined words</u> and plain <s>first struck words</s> '
+                'and plain <span style="background-color:#ffff66">some marked words</span> and plain '
+                '<u>Şeker İnsülin</u> then plain <s>Çay Öğle</s> end.</p>'))
+        found = {m["text"]: (m["kind"], m["role"], m["origin"]) for m in self.marks(self.pdf(build))["marks"]}
+        self.assertEqual(found, {
+            "first underlined words": ("underline", "emphasis", "drawn"),
+            "first struck words": ("strikethrough", "excluded", "drawn"),
+            "some marked words": ("highlight", "emphasis", "drawn"),
+            "Şeker İnsülin": ("underline", "emphasis", "drawn"),
+            "Çay Öğle": ("strikethrough", "excluded", "drawn"),
+        })
+
     def test_every_line_of_an_underlined_paragraph_is_kept(self):
         def build(p):
             for first, last in (("Mitochondria", "respiration"), ("Ribosomes", "cytoplasm"), ("The", "membrane")):

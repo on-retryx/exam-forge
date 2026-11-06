@@ -3,6 +3,10 @@
 ## [Unreleased]
 
 ### Added
+- Marked text: highlighted or underlined text is important and gets questions first, and it never means cancelled. Only a line through the text excludes it. Every agent prompt now says so, and the settings `marked_text_priority` and `marked_text_share` (default 60% of questions at most) control the weight
+- `forge.py marks` reads highlights, underlines and strikethroughs from annotations and from marks drawn into the page. For a drawn line, its height against the baseline decides between underline and strikethrough. It needs pymupdf; without it the agents still read marks from the page images
+- `forge.py marks-coverage` reports how many marks have a question and the share of questions from marked text, and fails when a question rests on struck text. `forge.py check --marks` makes the same failure check
+- Questions can carry `source.emphasis` and `source.mark`
 - `tools/ratchet.py`: a score ratchet for feature work. Tests come first, a better score is pushed, a worse one is undone, and a gate checks every test around a merge
 
 ## [0.3.1] - 2026-11-06

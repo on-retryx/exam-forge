@@ -61,6 +61,7 @@ import sys
 import tempfile
 import threading
 import time
+import unicodedata
 import urllib.request
 import webbrowser
 from pathlib import Path
@@ -795,7 +796,7 @@ def page_lines(page):
 
 
 def tidy(text):
-    return " ".join(text.split())
+    return " ".join(unicodedata.normalize("NFKC", text).split())  # a PDF's "fi" is often one ligature character
 
 
 def annotation_quads(annot):
@@ -1223,11 +1224,110 @@ def question_errors(q, fmt=None, page_range=None, mcq_options=None):
         e.append(f"{qid}: source must be {{pdf, section, page(int)}}")
     elif page_range and not (page_range[0] <= src["page"] <= page_range[1]):
         e.append(f"{qid}: source page {src['page']} is outside chunk range {page_range}")
+    if isinstance(src, dict):
+        if "emphasis" in src and src["emphasis"] not in ("highlight", "underline"):
+            e.append(f"{qid}: source.emphasis must be 'highlight' or 'underline'")
+        if "mark" in src and not re.fullmatch(r"mark-p\d+-\d+", str(src["mark"])):
+            e.append(f"{qid}: source.mark must look like 'mark-p12-3'")
     return e
 
 
 def parse_split(text):
     return {k: int(v) for k, v in (x.split("=") for x in text.split(","))}
+
+
+# ---------- marks-coverage ----------
+def compare_words(text):
+    """Words of a quote or a mark, free of case, ligatures, line-end hyphens and dotted letters."""
+    text = unicodedata.normalize("NFKD", str(text))
+    text = "".join(c for c in text if not unicodedata.combining(c)).casefold().replace("ı", "i")
+    return re.findall(r"\w+", re.sub(r"(\w)-\s+(\w)", r"\1\2", text))
+
+
+def shared_run(a, b):
+    """Length of the longest run of words the two lists have in common."""
+    best, row = 0, [0] * (len(b) + 1)
+    for x in a:
+        row = [0] + [row[j] + 1 if x == y else 0 for j, y in enumerate(b)]
+        best = max(best, *row)
+    return best
+
+
+def rests_on(q, m):
+    """Does this question stand on this mark? By its claim, or by a quote sharing the marked words."""
+    src = q.get("source") if isinstance(q.get("source"), dict) else {}
+    if src.get("mark") == m["id"]:
+        return True
+    page, quote, marked = src.get("page"), compare_words(q.get("quote", "")), compare_words(m.get("text", ""))
+    if not isinstance(page, int) or abs(page - m["page"]) > 1 or not quote or not marked:
+        return False  # the reviewer accepts a quote within one page of source.page, so this does too
+    return shared_run(quote, marked) >= min(3, len(quote), len(marked))
+
+
+def read_marks(path):
+    marks = read_json(path)
+    marks = marks.get("marks") if isinstance(marks, dict) else None
+    if not isinstance(marks, list) or not all(isinstance(m, dict) and {"id", "page", "role"} <= set(m) for m in marks):
+        fail(f"{path} is not a marks file; make one with: forge.py marks <pdf> <range> --out <file>")
+    return marks
+
+
+def marks_report(questions, marks, page_range=None):
+    known = {m["id"] for m in marks}
+    if page_range:  # one marks file may serve a whole PDF
+        marks = [m for m in marks if page_range[0] <= m["page"] <= page_range[1]]
+    emphasis = [m for m in marks if m["role"] == "emphasis"]
+    excluded = [m for m in marks if m["role"] == "excluded"]
+    covered, emphasized, hits, unknown = set(), 0, [], []
+    for q in questions:
+        src = q.get("source") if isinstance(q.get("source"), dict) else {}
+        touched = [m["id"] for m in emphasis if rests_on(q, m)]
+        covered.update(touched)
+        emphasized += bool(touched or src.get("emphasis"))
+        hits += [{"question": q.get("id"), "mark": m["id"], "page": m["page"], "text": m.get("text", "")}
+                 for m in excluded if rests_on(q, m)]
+        if src.get("mark") and src["mark"] not in known:
+            unknown.append({"question": q.get("id"), "mark": src["mark"]})
+    missing = [{k: m.get(k) for k in ("id", "page", "kind", "text")} for m in emphasis if m["id"] not in covered]
+    share = round(emphasized / len(questions), 4) if questions else 0
+    limit, priority = S["marked_text_share"], S["marked_text_priority"]
+    return {"emphasis_marks": len(emphasis), "covered": len(covered), "missing": missing,
+            "questions": len(questions), "emphasized_questions": emphasized, "emphasized_share": share,
+            "share_limit": limit, "priority": priority, "needs_more": bool(priority and missing and share < limit),
+            "excluded_marks": len(excluded), "excluded_hits": hits, "unknown_marks": unknown}
+
+
+def marks_problems(report):
+    return [f"{h['question']}: rests on struck text, which is out of scope ({h['mark']}, page {h['page']}): "
+            f"'{h['text']}'" for h in report["excluded_hits"]] \
+        + [f"{u['question']}: source.mark {u['mark']} is not in the marks file" for u in report["unknown_marks"]]
+
+
+def cmd_marks_coverage(a):
+    data = read_json(a.chunk)
+    questions = data.get("questions") if isinstance(data, dict) else None
+    if not isinstance(questions, list):
+        fail("'questions' is missing")
+    page_range = (data["page_start"], data["page_end"]) if data.get("page_start") and data.get("page_end") else None
+    report = marks_report(questions, read_marks(a.marks), page_range)
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+    problems = marks_problems(report)
+    if not problems:
+        return
+    print("MARKS FAILED:")
+    for x in problems:
+        print(" -", x)
+    if a.fail_out:  # in the shape `approve` reads, because a verified question cannot be replaced
+        results = {}
+        for u in report["unknown_marks"]:
+            results[u["question"]] = {"id": u["question"], "status": "FAIL", "reason": "location",
+                                      "feedback": f"source.mark {u['mark']} is not in the marks file."}
+        for h in report["excluded_hits"]:
+            results[h["question"]] = {"id": h["question"], "status": "FAIL", "reason": "scope",
+                                      "feedback": f"Rests on struck text, page {h['page']} ({h['mark']}): "
+                                                  f"'{h['text']}'. Write from text that is not struck."}
+        write_json(a.fail_out, {"file": Path(a.chunk).name, "results": list(results.values())})
+    sys.exit(1)
 
 
 def cmd_check(a):
@@ -1255,6 +1355,8 @@ def cmd_check(a):
         errors.append("identical question text repeated")
     for q in questions:
         errors += question_errors(q, fmt, page_range, a.mcq_options or S["mcq_options"])
+    if a.marks:
+        errors += marks_problems(marks_report(questions, read_marks(a.marks), page_range))
     count = {z: sum(1 for q in questions if q.get("difficulty") == z) for z in DIFFICULTIES}
     reduced = False
     if a.expected:
@@ -2511,7 +2613,11 @@ def main():
     p.add_argument("--expected", help="easy=2,medium=5,hard=3; separate alternatives with '|'")
     p.add_argument("--mcq-options", type=int, choices=[4, 5])
     p.add_argument("--min", type=int, help="thin-page floor from the plan (min_questions)")
+    p.add_argument("--marks", help="marks file: also fail on a question that rests on struck text")
     p.set_defaults(f=cmd_check)
+    p = sub.add_parser("marks-coverage"); p.add_argument("chunk"); p.add_argument("marks")
+    p.add_argument("--fail-out", help="write failures here in the form approve reads")
+    p.set_defaults(f=cmd_marks_coverage)
     p = sub.add_parser("screen"); p.add_argument("chunk"); p.add_argument("result"); p.set_defaults(f=cmd_screen)
     p = sub.add_parser("approve"); p.add_argument("chunk"); p.add_argument("result")
     p.add_argument("--audit", action="store_true"); p.set_defaults(f=cmd_approve)
