@@ -687,27 +687,47 @@
     }
   }
 
-  async function dropped(items) {
+  async function dropped(items, loose) {
     $("job-error").textContent = "";
-    const picked = items.map((i) => ({ entry: i.webkitGetAsEntry && i.webkitGetAsEntry(), file: i.getAsFile() }));
+    const picked = items.length ? items.map((i) => ({ entry: i.webkitGetAsEntry && i.webkitGetAsEntry(), file: i.getAsFile() }))
+      : loose.map((file) => ({ entry: null, file }));
     const files = [];
     try {
       for (const { entry, file } of picked) {
         if (entry) files.push(...await filesIn(entry));
         else if (file && isPdf(file.name)) files.push(file);
       }
-    } catch (e) { $("job-error").textContent = T("err_upload"); return; }
+    } catch (e) { $("job-error").textContent = T("err_read"); return; }
     if (!files.length) { $("job-error").textContent = T("err_no_pdfs"); return; }
     await uploadAll(files);
   }
 
-  ["dragover", "drop"].forEach((type) => window.addEventListener(type, (ev) => ev.preventDefault()));
-  const zone = $("job-tab");
-  zone.addEventListener("dragover", (ev) => { $("job-drop").classList.add("over"); ev.dataTransfer.dropEffect = "copy"; });
-  zone.addEventListener("dragleave", (ev) => { if (!zone.contains(ev.relatedTarget)) $("job-drop").classList.remove("over"); });
-  zone.addEventListener("drop", (ev) => {
-    $("job-drop").classList.remove("over");
-    dropped([...ev.dataTransfer.items].filter((i) => i.kind === "file"));
+  /* The whole window takes drops, so a file let go over an open dialog or the header
+     is never lost. Only file drags count: text dragged into a field works as usual.
+     The veil is a popover because an open modal dialog would otherwise cover it. */
+  const veil = $("drop-veil");
+  let veilTimer = 0;
+  const hasFiles = (ev) => ev.dataTransfer && [...ev.dataTransfer.types].includes("Files");
+  function showVeil(on) {
+    $("job-drop").classList.toggle("over", on);
+    if (veil.matches(":popover-open") !== on) veil.togglePopover();
+  }
+  ["dragenter", "dragover"].forEach((type) => window.addEventListener(type, (ev) => {
+    if (!hasFiles(ev)) return;
+    ev.preventDefault();
+    ev.dataTransfer.dropEffect = "copy";
+    showVeil(true);
+    clearTimeout(veilTimer);
+    veilTimer = setTimeout(() => showVeil(false), 200);  // dragover stops when the file leaves the window
+  }));
+  window.addEventListener("drop", (ev) => {
+    if (!hasFiles(ev)) return;
+    ev.preventDefault();
+    clearTimeout(veilTimer);
+    showVeil(false);
+    if ($("browse").open) $("browse").close();
+    showTab("job");
+    dropped([...ev.dataTransfer.items].filter((i) => i.kind === "file"), [...ev.dataTransfer.files]);
   });
 
   /* ---------- file browser ---------- */
