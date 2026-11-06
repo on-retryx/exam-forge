@@ -9,7 +9,7 @@ from pathlib import Path
 
 def main():
     try:
-        d = json.load(sys.stdin)
+        d = json.load(sys.stdin.buffer)  # always UTF-8; a Windows pipe would decode as the ANSI code page
         tool_input = d.get("tool_input") or {}
         prompt = str(tool_input.get("prompt", ""))
         m = re.search(r"EXAM_FORGE: ([^\n]+)", prompt)

@@ -3,6 +3,8 @@
   const W = 360, H = 262, CELL = 4;
   const COLS = W / CELL, ROWS = H / CELL;
   const SPEED = 42; // units per second
+  const FRAME_MS = 30; // about 30 frames a second: a small pixel canvas gains nothing from more, and costs twice the CPU
+  const CATCH_UP_MS = 1000; // a longer pause means nobody was watching
   const reduced = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   const EDITOR_COLS = [32, 76, 120], ROWS_Y = [108, 154, 200, 246], EDITOR_ROWS = ROWS_Y;
   const REVIEW_COLS = [240, 284, 328], REVIEW_ROWS = ROWS_Y;
@@ -187,12 +189,31 @@
     }
 
     /* ---------- loop ---------- */
+    wake() {
+      if (this.asleep) { this.asleep = false; requestAnimationFrame((t) => this.frame(t)); }
+    }
+
     frame(t) {
-      const dt = Math.min((t - this.last) / 1000 || 0, 0.1);
-      this.last = t; this.tick += dt;
-      this.update(dt);
-      this.draw();
+      if (!this.c.clientWidth) { this.asleep = true; return; }  // on another tab the canvas has no size
       requestAnimationFrame((n) => this.frame(n));
+      const gap = t - this.last;
+      if (gap < FRAME_MS) return;
+      const dt = Math.min(gap / 1000 || 0, 0.1);
+      this.last = t; this.tick += dt;
+      if (gap > CATCH_UP_MS) this.catchUp(gap / 1000); else this.update(dt);
+      this.draw();
+    }
+
+    /* Nothing updates on a hidden tab, so the end of what happened meanwhile is applied at once instead of
+       replayed late. Commands run in their order, so a.work and the desk stacks end as they would have. */
+    catchUp(seconds) {
+      for (let n = 0; n < 10000 && this.actors.some((a) => a.q.length); n++) {
+        for (const a of this.actors) {
+          const cmd = a.q.shift();
+          if (cmd && cmd.walk) { a.x = cmd.walk.x; a.y = cmd.walk.y; a.pose = "stand"; } else if (cmd && cmd.fn) cmd.fn();
+        }
+      }
+      this.update(seconds);
     }
 
     chatter(dt) {

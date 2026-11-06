@@ -52,9 +52,11 @@ import random
 import re
 import shlex
 import shutil
+import string
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.request
 import webbrowser
@@ -64,6 +66,8 @@ import app_icon  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 TEMPLATES = ROOT / "templates"
+LOCAL = urllib.request.build_opener(urllib.request.ProxyHandler({}))  # a proxy cannot reach this computer's 127.0.0.1
+SETTINGS_LOCK = threading.Lock()  # the Studio writes settings from many threads
 
 
 class SettingsError(Exception):
@@ -149,9 +153,12 @@ def validate_settings(s):
 
 def read_json_file(p):
     try:
-        return json.loads(Path(p).read_text(encoding="utf-8"))
+        data = json.loads(Path(p).read_text(encoding="utf-8"))
     except Exception as e:
         raise SettingsError(f"could not read {p}: {e}")
+    if not isinstance(data, dict):
+        raise SettingsError(f"could not read {p}: it must hold a JSON object")
+    return data
 
 
 def load_settings(overlay=None):
@@ -187,9 +194,23 @@ def resolve_team(s):
     return team
 
 
-def write_user_setting(key, value):
-    """Validate and persist one setting. value=None removes the override."""
-    p = user_settings_path()
+def lock_settings():
+    """One writer across processes. O_EXCL behaves the same on every platform, and a lock
+    left by a command that died goes once it is no longer fresh."""
+    lock = config_dir() / "settings.lock"
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    for _ in range(LOCK_TRIES):
+        try:
+            os.close(os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+            return lock
+        except FileExistsError:
+            if not is_fresh(lock):
+                remove_quiet(lock)
+            time.sleep(0.02)
+    raise SettingsError("another command is saving settings; try again")
+
+
+def update_user_settings(p, key, value):
     user = read_json_file(p) if p.is_file() else {}
     if value is None:
         parts = key.split(".")
@@ -205,8 +226,21 @@ def write_user_setting(key, value):
     errors = validate_settings(_deep_merge(defaults, json.loads(json.dumps(user))))
     if errors:
         raise SettingsError("; ".join(errors))
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(user, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    write_atomic(p.resolve(), user, indent=2)
+
+
+def write_user_setting(key, value):
+    """Validate and persist one setting. value=None removes the override."""
+    p = user_settings_path()
+    with SETTINGS_LOCK:
+        try:
+            lock = lock_settings()
+            try:
+                update_user_settings(p, key, value)
+            finally:
+                remove_quiet(lock)
+        except OSError as e:
+            raise SettingsError(f"cannot save settings in {p.parent}: {e.strerror}")
 
 
 def parse_value(spec, raw):
@@ -267,7 +301,10 @@ def cmd_config(a):
         else:
             p = user_settings_path()
             if p.is_file():
-                p.unlink()
+                try:
+                    p.unlink()
+                except OSError as e:
+                    raise SettingsError(f"cannot save settings in {p.parent}: {e.strerror}")
             print("all settings reset")
 
 
@@ -346,6 +383,7 @@ LABELS = {
     },
 }
 S = None  # effective settings, set in main()
+UTF8 = {"encoding": "utf-8", "errors": "replace"}  # for child output; the default is the Windows ANSI code page
 
 
 def fail(msg, code=2):
@@ -397,13 +435,12 @@ def file_context(path):
 
 def register_run(run):
     p = config_dir() / "runs.json"
+    runs = read_quiet(p)
+    runs = [str(run)] + [r for r in runs if r != str(run)] if isinstance(runs, list) else [str(run)]
     try:
-        runs = json.loads(p.read_text(encoding="utf-8")) if p.is_file() else []
-    except ValueError:
-        runs = []
-    runs = [str(run)] + [r for r in runs if r != str(run)]
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(runs[:50], ensure_ascii=False), encoding="utf-8")
+        write_atomic(p, runs[:50])
+    except OSError:
+        pass  # the list only feeds the Studio; never block book production
 
 
 def cmd_event(a):
@@ -417,6 +454,9 @@ def cmd_event(a):
 # ---------- requirements ----------
 # One entry per thing a job needs. To require something new, add an entry here:
 # the skill, `doctor` and the Studio's start screen all read this table.
+MIN_PYTHON = (3, 9)  # the oldest version the tests have run on; the code itself needs 3.8 (Path.unlink(missing_ok))
+
+
 def venv_dir():
     return config_dir() / "venv"
 
@@ -436,7 +476,7 @@ def load_fitz():
 
 def check_python():
     version = ".".join(map(str, sys.version_info[:3]))
-    return (sys.version_info >= (3, 9), version)
+    return (sys.version_info >= MIN_PYTHON, version)
 
 
 def check_pdf_tool():
@@ -466,12 +506,13 @@ def install_pymupdf():
 
 
 REQUIREMENTS = [
-    {"id": "python", "required": True, "check": check_python, "hint": "Python 3.9 or newer: https://www.python.org/downloads/"},
+    {"id": "python", "required": True, "check": check_python, "hint": f"Python {MIN_PYTHON[0]}.{MIN_PYTHON[1]} or newer: https://www.python.org/downloads/"},
     {"id": "pdf_tool", "required": True, "check": check_pdf_tool, "install": install_pymupdf,
      "hint": "Run: forge.py doctor --install pdf_tool"},
     {"id": "browser", "required": True, "check": check_browser,
      "install": {"darwin": [["brew", "install", "--cask", "google-chrome"]],
-                 "win32": [["winget", "install", "-e", "--id", "Google.Chrome"]]},
+                 "win32": [["winget", "install", "-e", "--id", "Google.Chrome",
+                            "--accept-source-agreements", "--accept-package-agreements"]]},
      "hint": "Install Chrome, Edge or Chromium, or set EXAM_FORGE_BROWSER."},
     {"id": "claude", "required": False, "check": check_claude, "hint": "Claude Code CLI on PATH; used to see which models you can use."},
 ]
@@ -501,7 +542,7 @@ def install_requirement(name):
         raise SettingsError(f"cannot install '{name}' from here")
     for step in steps:
         try:
-            r = subprocess.run(step, capture_output=True, text=True, timeout=600, stdin=subprocess.DEVNULL)
+            r = subprocess.run(step, capture_output=True, timeout=600, stdin=subprocess.DEVNULL, **UTF8)
         except (OSError, subprocess.TimeoutExpired) as e:
             raise SettingsError(f"{step[0]} failed: {e}")
         if r.returncode != 0:
@@ -663,6 +704,13 @@ def page_count(pdf: Path):
                 return int(out)
         except Exception:
             pass
+    fitz = load_fitz()  # the scan below cannot see a page tree inside a compressed object stream
+    if fitz:
+        try:
+            with fitz.open(str(pdf)) as doc:
+                return doc.page_count
+        except Exception:
+            pass
     try:
         data = pdf.read_bytes()
         counts = [int(m) for m in re.findall(rb"/Type\s*/Pages\b[^>]*?/Count\s+(\d+)", data)]
@@ -704,7 +752,7 @@ def cmd_render_pages(a):
         return
     if shutil.which("pdftoppm"):
         r = subprocess.run(["pdftoppm", "-png", "-r", str(a.dpi), "-f", str(first), "-l", str(last),
-                            str(pdf), str(target / f"{pdf.stem}-p")], capture_output=True, text=True)
+                            str(pdf), str(target / f"{pdf.stem}-p")], capture_output=True, **UTF8)
         if r.returncode != 0:
             fail(f"pdftoppm failed: {r.stderr[-400:]}")
         for p in sorted(target.glob(f"{pdf.stem}-p*.png")):
@@ -1296,22 +1344,37 @@ def cmd_render(a):
     contents = not a.no_contents and S["book_contents"] != "never"
     page, total, sections = build_book_html(book, placement, contents)
     out = Path(a.out).expanduser().resolve()
-    out.parent.mkdir(parents=True, exist_ok=True)
-    if out.exists():
-        stamp = dt.datetime.fromtimestamp(out.stat().st_mtime).strftime("%Y-%m-%d-%H%M")
-        backup = out.with_name(f"{out.stem}-{stamp}.pdf")
-        out.rename(backup)
-        print(f"previous book kept: {backup.name}")
+    try:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        if out.exists():
+            stamp = dt.datetime.fromtimestamp(out.stat().st_mtime).strftime("%Y-%m-%d-%H%M")
+            stem = out.stem.encode("utf-8")[:200].decode("utf-8", "ignore")  # the date must still fit a file name
+            backup, n = out.with_name(f"{stem}-{stamp}.pdf"), 1
+            while backup.exists():  # never over an older backup
+                n += 1
+                backup = out.with_name(f"{stem}-{stamp}-{n}.pdf")
+            os.replace(out, backup)  # rename() fails on Windows when the target exists
+            print(f"previous book kept: {backup.name}")
+    except OSError as e:
+        hint = (f"If {out.name} is in use, close it in your PDF viewer and render again." if sys.platform == "win32"
+                else "Check the permissions of that folder.")
+        fail(f"cannot write the book in {out.parent}: {e.strerror}. {hint}")
     run = find_run(a.json)
-    with tempfile.TemporaryDirectory() as td:
-        h = Path(td) / "book.html"
-        h.write_text(page, encoding="utf-8")
+    h = None
+    td = tempfile.mkdtemp(prefix="exam-forge-")
+    try:
+        # Next to the book, not in the temp folder: a snap Chromium has a private /tmp and would print an error page.
+        # A short fixed name: one built from the book's name can pass the file system's limit when the book does not.
+        fd, name = tempfile.mkstemp(dir=out.parent, prefix=".exam-forge-", suffix=".html")
+        h = Path(name)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(page)
         if a.html:
-            shutil.copy(h, Path(a.html).expanduser())
+            Path(a.html).expanduser().write_text(page, encoding="utf-8")
         browser = find_browser()
         if not browser:
             fallback = out.with_suffix(".html")
-            shutil.copy(h, fallback)
+            fallback.write_text(page, encoding="utf-8")
             emit(run, "render", questions=total, out=str(fallback), html_only=True)
             print(f"ERROR: Chrome, Chromium or Edge not found. Book written as HTML: {fallback}\n"
                   "Open it in a browser and print to PDF, or set EXAM_FORGE_BROWSER to a browser path.",
@@ -1319,16 +1382,25 @@ def cmd_render(a):
             sys.exit(3)
         try:
             r = subprocess.run([browser, "--headless=new", "--disable-gpu", "--no-pdf-header-footer",
-                                f"--user-data-dir={td}/profile", "--no-first-run",
+                                "--use-mock-keychain", "--password-store=basic",
+                                f"--user-data-dir={Path(td) / 'profile'}", "--no-first-run",
                                 f"--print-to-pdf={out}", h.as_uri()],
-                               capture_output=True, text=True, timeout=180)
+                               capture_output=True, timeout=180, **UTF8)
         except subprocess.TimeoutExpired:
             fallback = out.with_suffix(".html")
-            shutil.copy(h, fallback)
+            fallback.write_text(page, encoding="utf-8")
             emit(run, "render", questions=total, out=str(fallback), html_only=True)
             print(f"ERROR: {Path(browser).name} did not finish printing. Book written as HTML: {fallback}",
                   file=sys.stderr)
             sys.exit(3)
+    except OSError as e:
+        if not h:  # the page to print could not be created: the folder is the news, not the temp name
+            fail(f"cannot write the book in {out.parent}: {e.strerror}. Check the permissions of that folder.")
+        fail(f"cannot write the book: {e}")
+    finally:
+        if h:
+            remove_quiet(h)
+        shutil.rmtree(td, ignore_errors=True)  # Chrome's helpers can hold the profile open a moment on Windows
     if not out.exists():
         fail(f"PDF was not produced: {r.stderr[-800:]}")
     emit(run, "render", questions=total, out=str(out))
@@ -1588,13 +1660,15 @@ def model_access():
 
 def probe_opus():
     """Ask Claude Code for one word from Opus. True, False, or None when unclear."""
+    if os.environ.get("EXAM_FORGE_NO_PROBE"):
+        return None
     claude = shutil.which("claude")
     if not claude:
         return None
     try:
         r = subprocess.run([claude, "-p", "Reply with: ok", "--model", "opus", "--output-format", "json",
                             "--no-session-persistence", "--disable-slash-commands", "--strict-mcp-config", "--tools", ""],
-                           capture_output=True, text=True, timeout=90, stdin=subprocess.DEVNULL, cwd=tempfile.gettempdir())
+                           capture_output=True, timeout=90, stdin=subprocess.DEVNULL, cwd=tempfile.gettempdir(), **UTF8)
     except (OSError, subprocess.TimeoutExpired):
         return None
     try:
@@ -1618,6 +1692,8 @@ def cmd_models(a):
 
 def probe_in_background():
     """The answer rarely changes: look again after 30 days, or after 1 when it was unclear."""
+    if os.environ.get("EXAM_FORGE_NO_PROBE"):  # tests: the real CLI must never start from here
+        return
     known = model_access()
     try:
         age = (dt.datetime.now() - dt.datetime.fromisoformat(known["t"])).days
@@ -1681,17 +1757,35 @@ def cmd_studio(a):
 FRESH_SECONDS = 10
 MAX_FOLDER_PDFS = 200
 ASK_POLL_SECONDS = 1
+REPLACE_TRIES = 20
+LOCK_TRIES = 600  # at 20 ms, longer than a dead command's lock stays fresh
+STUDIO_START_TICKS = 100  # of 0.1 s
+MAX_UPLOAD_NAME = 240  # bytes; file systems stop at 255, and a repeated name gets a suffix
 
 
 def intake_dir():
     return config_dir() / "intake"
 
 
-def write_atomic(path, data):
+def write_atomic(path, data, indent=None):
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
-    os.replace(tmp, path)
+    tmp = path.with_name(f".{path.name}.{os.urandom(4).hex()}.tmp")
+    try:
+        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=indent) + "\n", encoding="utf-8")
+        try:
+            os.chmod(tmp, path.stat().st_mode & 0o7777)  # a file the user made private stays private
+        except OSError:
+            pass  # a new file
+        for attempt in range(REPLACE_TRIES):
+            try:
+                os.replace(tmp, path)
+                return
+            except PermissionError:  # Windows: the Studio or an antivirus has the file open for a moment
+                if attempt == REPLACE_TRIES - 1:
+                    raise
+                time.sleep(0.05)
+    finally:
+        remove_quiet(tmp)
 
 
 def is_fresh(path):
@@ -1715,8 +1809,56 @@ def remove_quiet(path):
         pass
 
 
+def pid_alive(pid):
+    if pid >= 2 ** 31:  # no such process, and os.kill would raise OverflowError
+        return False
+    if sys.platform == "win32":  # os.kill(pid, 0) would send Ctrl+C there
+        import ctypes
+        kernel = ctypes.windll.kernel32
+        handle = kernel.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+        code = ctypes.c_ulong()
+        alive = handle and kernel.GetExitCodeProcess(handle, ctypes.byref(code)) and code.value == 259  # STILL_ACTIVE
+        if handle:
+            kernel.CloseHandle(handle)
+        return bool(alive)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        pass  # someone else's process, so it exists
+    return True
+
+
 def session_waiting():
-    return is_fresh(intake_dir() / "waiter.json")
+    waiter = intake_dir() / "waiter.json"
+    if not is_fresh(waiter):
+        return False
+    mark = read_quiet(waiter)
+    pid = mark.get("pid") if isinstance(mark, dict) else None
+    return pid_alive(pid) if type(pid) is int and pid > 0 else True
+
+
+def clear_leftovers():
+    """A job or a cancel with no live wait was left by one that died, and must never run.
+    A live wait is only between polls: what is here is its own, and it will claim it."""
+    waiter = intake_dir() / "waiter.json"
+    mark = read_quiet(waiter)
+    pid = mark.get("pid") if isinstance(mark, dict) else None
+    if is_fresh(waiter) and type(pid) is int and pid > 0 and pid != os.getpid() and pid_alive(pid):
+        return
+    for name in ("job.json", "cancel.json"):
+        remove_quiet(intake_dir() / name)
+
+
+def claim(path):
+    """Move path out of the way. Only one of many waits can succeed. Its new name, or None."""
+    claimed = path.with_name(f".claimed.{os.getpid()}")
+    try:
+        os.replace(path, claimed)
+        return claimed
+    except OSError:
+        return None
 
 
 def intake_request():
@@ -1736,40 +1878,62 @@ def validate_pdf(raw):
     return str(pdf)
 
 
-def pdfs_under(folder):
-    """PDFs in a folder and its subfolders, skipping hidden entries."""
+def pdfs_under(folder, denied):
+    """PDFs in a folder and its subfolders, skipping hidden entries. Folders it may not open go into denied."""
     found = []
-    for base, dirs, files in os.walk(folder):
+    for base, dirs, files in os.walk(folder, onerror=denied.append):
         dirs[:] = sorted(d for d in dirs if not d.startswith("."))
         found += [Path(base) / f for f in sorted(files)
                   if f.lower().endswith(".pdf") and not f.startswith(".")]
         if len(found) > MAX_FOLDER_PDFS:
-            raise SettingsError(f"more than {MAX_FOLDER_PDFS} PDFs in {folder.name}; choose a smaller folder")
+            raise SettingsError(f"more than {MAX_FOLDER_PDFS} PDFs in {folder.name or folder}; choose a smaller folder")
     return found
 
 
-def expand_sources(paths):
-    """Files and folders the user chose, as a flat list of PDF paths."""
+def expand_sources(paths, skipped=None):
+    """Files and folders the user chose, as a flat list of PDF paths. What cannot be used
+    inside a folder is named in skipped, so one bad file does not lose the whole folder."""
+    skipped = [] if skipped is None else skipped
+    if not isinstance(paths, list) or not all(isinstance(p, (str, os.PathLike)) and str(p).strip() for p in paths):
+        raise SettingsError("paths must be a list of file or folder paths")
     out = []
     for raw in paths:
         p = Path(str(raw).strip()).expanduser().resolve()
-        if p.is_dir():
-            inside = pdfs_under(p)
-            if not inside:
-                raise SettingsError(f"no PDFs in {p.name}")
-            out += [validate_pdf(str(f)) for f in inside]
-        else:
-            out.append(validate_pdf(str(p)))
+        try:
+            if not p.is_dir():
+                out.append(validate_pdf(str(p)))
+                continue
+            denied, good, bad = [], [], []
+            for f in pdfs_under(p, denied):
+                try:
+                    good.append(validate_pdf(str(f)))
+                except (SettingsError, OSError):
+                    bad.append(f.name)
+            skipped += bad + [Path(e.filename).name for e in denied]
+            if not good and denied:
+                raise SettingsError(f"cannot open {denied[0].filename}: {denied[0].strerror}")
+            if not good and bad:
+                more = f" and {len(bad) - 5} more" if len(bad) > 5 else ""
+                raise SettingsError(f"no PDFs in {p.name or p}; these are not real PDFs: {', '.join(bad[:5])}{more}")
+            if not good:
+                raise SettingsError(f"no PDFs in {p.name or p}")
+            out += good
+        except OSError as e:
+            raise SettingsError(f"cannot read {p}: {e.strerror}")
     return list(dict.fromkeys(out))
 
 
 def list_folder(raw):
     """Folders and PDFs for the Studio's file browser. Other files stay out of it."""
-    p = Path(str(raw or "~").strip() or "~").expanduser().resolve()
-    file = None
-    if p.is_file():
-        file, p = validate_pdf(str(p)), p.parent
-    if not p.is_dir():
+    try:
+        p = Path(str(raw or "~").strip() or "~").expanduser().resolve()
+        file = None
+        if p.is_file():
+            file, p = validate_pdf(str(p)), p.parent
+        found = p.is_dir()
+    except (OSError, RuntimeError) as e:  # a drive with no disk in it, a locked folder, an unknown ~user
+        raise SettingsError(f"cannot open {raw}: {e}")
+    if not found:
         raise SettingsError(f"folder not found: {p}")
     try:
         names = [e for e in os.scandir(p) if not e.name.startswith(".")]
@@ -1787,11 +1951,26 @@ def list_folder(raw):
     return {"path": str(p), "parent": str(p.parent) if p.parent != p else None, "entries": entries, "file": file}
 
 
+def windows_drives():
+    """Roots such as D:\\. This reads a bit mask, so a sleeping or empty drive is not touched."""
+    try:
+        import ctypes
+        mask = ctypes.windll.kernel32.GetLogicalDrives()
+    except (ImportError, AttributeError, OSError):
+        return []
+    return [f"{letter}:\\" for i, letter in enumerate(string.ascii_uppercase) if mask >> i & 1]
+
+
 def places():
     home = Path.home()
     spots = [("home", home), ("desktop", home / "Desktop"), ("documents", home / "Documents"),
-             ("downloads", home / "Downloads"), ("volumes", Path("/Volumes"))]
-    return [{"key": k, "path": str(p)} for k, p in spots if p.is_dir()]
+             ("downloads", home / "Downloads")]
+    if sys.platform == "darwin":
+        spots.append(("volumes", Path("/Volumes")))
+    found = [{"key": k, "path": str(p)} for k, p in spots if p.is_dir()]
+    if sys.platform == "win32":  # a drive root has no parent, so the Up button never reaches another drive
+        found += [{"key": "drive", "label": d[:2], "path": d} for d in windows_drives()]
+    return found
 
 
 def upload_target(batch, name):
@@ -1801,13 +1980,18 @@ def upload_target(batch, name):
     clean = re.sub(r'[\x00-\x1f/\\:*?"<>|]', "_", Path(str(name).replace("\\", "/")).name).strip()
     if clean.startswith(".") or not clean.lower().endswith(".pdf"):
         raise SettingsError(f"not a PDF: {clean}")
+    if len(os.fsencode(clean)) > MAX_UPLOAD_NAME:
+        raise SettingsError("the file name is too long")
     folder = Path.home() / "Exam Forge" / batch
     folder.mkdir(parents=True, exist_ok=True)
     target, n = folder / clean, 1
-    while target.exists():
-        n += 1
-        target = folder / f"{Path(clean).stem}-{n}.pdf"
-    return target
+    while True:
+        try:  # taken here and now, so parallel drops of one name cannot end up in one file
+            os.close(os.open(target, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+            return target
+        except FileExistsError:
+            n += 1
+            target = folder / f"{Path(clean).stem}-{n}.pdf"
 
 
 def validate_job(body, settings):
@@ -1870,21 +2054,29 @@ def ensure_studio():
     log = config_dir() / "studio.log"
     log.parent.mkdir(parents=True, exist_ok=True)
     with open(log, "w", encoding="utf-8") as out:
-        subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "studio", "--no-open"],
-                         stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT,
-                         start_new_session=True)
-    for _ in range(50):
+        proc = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "studio", "--no-open"],
+                                stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT,
+                                start_new_session=True)
+    for _ in range(STUDIO_START_TICKS):
         time.sleep(0.1)
-        m = re.search(r"http://127\.0\.0\.1:(\d+)", log.read_text(encoding="utf-8"))
+        ended = proc.poll() is not None  # asked before the log is read, so its last line is not missed
+        m = re.search(r"http://127\.0\.0\.1:(\d+)", log.read_text(**UTF8))
         if m and server.is_studio(int(m.group(1))):
             return m.group(0)
-    fail(f"Studio did not start; see {log}")
+        if ended:
+            break
+    if proc.poll() is None:  # else a Studio could appear after the failure was reported
+        proc.kill()
+        proc.wait()
+    lines = log.read_text(**UTF8).split("\n")
+    last = next((x.strip() for x in reversed(lines) if x.strip()), "it did not answer")
+    fail(f"Studio did not start: {re.sub('^ERROR: ', '', last)} (log: {log})")
 
 
 def page_open(base):
     """True when a Studio page is already polling; it shows the new request by itself."""
     try:
-        with urllib.request.urlopen(base + "/api/ping", timeout=2) as r:
+        with LOCAL.open(base + "/api/ping", timeout=2) as r:
             return bool(json.load(r).get("watching"))
     except (OSError, ValueError):
         return False
@@ -1892,10 +2084,10 @@ def page_open(base):
 
 def intake_open(a):
     box = intake_dir()
-    for name in ("job.json", "cancel.json"):
-        remove_quiet(box / name)
+    clear_leftovers()
+    skipped = []
     try:
-        pdfs = expand_sources(a.pdf or [])
+        pdfs = expand_sources(a.pdf or [], skipped)
     except SettingsError as e:
         fail(str(e))
     write_atomic(box / "request.json", {"id": os.urandom(6).hex(), "t": now_iso(), "pdfs": pdfs,
@@ -1905,32 +2097,41 @@ def intake_open(a):
     url = base + "/?tab=job"
     if S["studio_auto_open"] and not a.no_open and not page_open(base):
         open_window(url)
-    print(json.dumps({"url": url}))
+    print(json.dumps({"url": url, "skipped": skipped}))
 
 
 def intake_wait(a):
     box = intake_dir()
     waiter, job_file, cancel = box / "waiter.json", box / "job.json", box / "cancel.json"
+    clear_leftovers()
     deadline = time.time() + a.timeout
+
+    def take_job():
+        claimed = claim(job_file)
+        if not claimed:
+            return False
+        print(claimed.read_text(encoding="utf-8"))
+        remove_quiet(claimed)
+        remove_quiet(box / "request.json")
+        return True
+
     try:
         while time.time() < deadline:
             write_atomic(waiter, {"pid": os.getpid()})
-            if cancel.exists():
-                remove_quiet(cancel)
+            claimed = claim(cancel)
+            if claimed:
+                remove_quiet(claimed)
                 print('{"cancelled": true}')
                 sys.exit(5)
-            claimed = box / f".claimed.{os.getpid()}"
-            try:
-                os.replace(job_file, claimed)
-            except OSError:
-                time.sleep(ASK_POLL_SECONDS)
-                continue
-            print(claimed.read_text(encoding="utf-8"))
-            remove_quiet(claimed)
-            remove_quiet(box / "request.json")
-            return
+            if take_job():
+                return
+            time.sleep(ASK_POLL_SECONDS)
     finally:
-        remove_quiet(waiter)
+        mark = read_quiet(waiter)
+        if isinstance(mark, dict) and mark.get("pid") == os.getpid():  # with two waits, the mark may be the other's
+            remove_quiet(waiter)
+    if take_job():  # accepted just as the time ran out: the next wait would throw it away
+        return
     print('{"timeout": true}')
     sys.exit(4)
 
@@ -1965,6 +2166,7 @@ def cmd_ask(a):
         if not (sep and value and label):
             fail(f"option must look like value=Label: {raw}")
         options.append({"value": value, "label": label})
+    ensure_studio()  # it may have closed during a long, quiet stretch of the job
     ask_file, answer_file = run / "ask.json", run / "answer.json"
     remove_quiet(answer_file)
     write_atomic(ask_file, {"id": a.id, "text": a.text, "options": options})
@@ -1987,8 +2189,19 @@ def cmd_ask(a):
 
 
 # ---------- cli ----------
+def utf8_output():
+    """Claude Code reads UTF-8, but a Windows pipe defaults to the ANSI code page. There, print()
+    garbles Turkish paths and crashes on any character the code page lacks."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="backslashreplace")
+        except (AttributeError, ValueError):
+            pass  # replaced by something that is not a text stream
+
+
 def main():
     global S
+    utf8_output()
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("doctor"); p.add_argument("--json", action="store_true"); p.add_argument("--install")

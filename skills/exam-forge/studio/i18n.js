@@ -1,6 +1,7 @@
 /* Interface text. Setting labels come from settings.schema.json. */
 window.I18N = {
   en: {
+    studio_gone: "The Studio has closed. Run /exam-forge:studio to open it again.", skipped_pdfs: "Left out, not a readable PDF: {names}",
     open_console: "Team console", console_title: "Team console", close: "Close", prev: "Previous", next: "Next", locate: "Show in office",
     fact_status: "Status", fact_model: "Model", fact_chunk: "Chunk", agent_log: "Activity", agents_active: "{active} of {total} working",
     status_working: "Working", status_moving: "Moving", status_idle: "Idle", no_activity: "No activity yet", none: "—",
@@ -57,6 +58,7 @@ window.I18N = {
     pass: "PASS", fail: "FAIL", printed: "PRINTED",
   },
   tr: {
+    studio_gone: "Studio kapandı. Yeniden açmak için /exam-forge:studio komutunu çalıştırın.", skipped_pdfs: "Eklenmedi, okunabilir PDF değil: {names}",
     open_console: "Ekip konsolu", console_title: "Ekip konsolu", close: "Kapat", prev: "Önceki", next: "Sonraki", locate: "Ofiste göster",
     fact_status: "Durum", fact_model: "Model", fact_chunk: "Parça", agent_log: "Etkinlik", agents_active: "{total} ajandan {active} çalışıyor",
     status_working: "Çalışıyor", status_moving: "Yolda", status_idle: "Boşta", no_activity: "Henüz etkinlik yok", none: "—",

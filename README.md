@@ -39,6 +39,17 @@ Or in two steps:
 /plugin install exam-forge@retryx
 ```
 
+## Update
+
+From a terminal:
+
+```
+claude plugin marketplace update retryx
+claude plugin update exam-forge@retryx
+```
+
+Or use the `/plugin` menu in Claude Code. Restart Claude Code afterwards: an update only applies after a restart.
+
 ## Use
 
 Drop PDFs into the chat or give their paths, then ask in plain words:
@@ -137,7 +148,7 @@ The Studio opens in a window of its own when a job starts, with a start screen t
 
 In the job form you can name a cost target in USD or tokens and get the best team for it, or pick each role's model and effort and watch the estimate change. The estimate is a range: it starts from one measured job and adjusts to your own jobs over time. A target is not a hard limit, because the number of rewrite rounds can't be known in advance; if spending passes 120% of it, the Studio asks whether to go on. USD figures use API list prices, so on a subscription they are only a comparison.
 
-It never shows question text. Open it any time with `/exam-forge:studio`. To stop it opening by itself: `studio_auto_open` = `false`.
+It never shows question text. Open it any time with `/exam-forge:studio`. To stop it opening by itself: `studio_auto_open` = `false`. A running Studio closes itself after 30 quiet minutes, and within about a minute and a half if a newer one has replaced it, but not while a window is open, a question is waiting for an answer, or a job has written an event in the last 15 minutes. One agent that stays silent for longer, with no window open, can see it close. `ask` starts it again when it needs one.
 
 ## Settings
 
@@ -201,4 +212,4 @@ claude --plugin-dir .
 
 ## Türkçe özet
 
-**Exam Forge**, ders notu PDF'lerinden yazdırılabilir soru kitabı üreten bir Claude Code eklentisidir. Her soru kaynak sayfa ve birebir alıntı taşır. Ayrı bir reviewer sayfaları kendisi açıp denetler, doğrulanmamış soru kitaba giremez. Sorular PDF'in dilinde yazılır; Türkçe kaynak Türkçe soru verir. Kitap etiketleri ve Studio arayüzü Türkçe de kullanılabilir. Cevaplar kitabın sonuna, sorunun altına ya da bölüm sonuna konabilir. Birden çok PDF tek kitapta birleştirilebilir. `/exam-forge:exam-forge` Studio'da bir iş formu açar; dosya ya da klasör ekleme (gezinerek veya sürükle bırakla), ayarlar ve işin takibi tarayıcıdan yapılır, Claude Code oturumu ise açık kalır. Tüm ayarlar Studio'dan ya da `/exam-forge:config` ile değişir. Kurulum: `/plugin install exam-forge --marketplace on-retryx/exam-forge`.
+**Exam Forge**, ders notu PDF'lerinden yazdırılabilir soru kitabı üreten bir Claude Code eklentisidir. Her soru kaynak sayfa ve birebir alıntı taşır. Ayrı bir reviewer sayfaları kendisi açıp denetler, doğrulanmamış soru kitaba giremez. Sorular PDF'in dilinde yazılır; Türkçe kaynak Türkçe soru verir. Kitap etiketleri ve Studio arayüzü Türkçe de kullanılabilir. Cevaplar kitabın sonuna, sorunun altına ya da bölüm sonuna konabilir. Birden çok PDF tek kitapta birleştirilebilir. `/exam-forge:exam-forge` Studio'da bir iş formu açar; dosya ya da klasör ekleme (gezinerek veya sürükle bırakla), ayarlar ve işin takibi tarayıcıdan yapılır, Claude Code oturumu ise açık kalır. Tüm ayarlar Studio'dan ya da `/exam-forge:config` ile değişir. Kurulum: `/plugin install exam-forge --marketplace on-retryx/exam-forge`. Güncellemeden sonra Claude Code'u yeniden başlatın; güncelleme ancak o zaman geçerli olur.

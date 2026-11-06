@@ -11,6 +11,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+import conftest  # noqa: F401
+
 ROOT = Path(__file__).resolve().parent.parent
 BIN = ROOT / "skills" / "exam-forge" / "bin"
 FORGE = BIN / "forge.py"
@@ -30,6 +32,7 @@ class Base(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
         os.environ.pop("EXAM_FORGE_SETTINGS", None)
+        os.environ.pop("EXAM_FORGE_BROWSER", None)
         forge.S = self.s = forge.load_settings()
         self.tokens = {r: forge.role_tokens(r, 30, 40, self.s["chief_sample_rate"]) for r in forge.ROLES}
 
@@ -112,6 +115,10 @@ class Defaults(Base):
 
 
 class Probe(Base):
+    def setUp(self):
+        super().setUp()
+        os.environ.pop("EXAM_FORGE_NO_PROBE")  # every test here that runs a CLI puts a stand-in first on PATH
+
     def fake_claude(self, body):
         folder = self.home / "bin"
         folder.mkdir(exist_ok=True)
@@ -142,6 +149,18 @@ class Probe(Base):
         with mock.patch.object(forge.subprocess, "Popen") as popen:
             forge.probe_in_background()
         popen.assert_called_once()
+
+    def test_the_guard_stops_the_background_probe(self):
+        os.environ["EXAM_FORGE_NO_PROBE"] = "1"
+        with mock.patch.object(forge.subprocess, "Popen") as popen:
+            forge.probe_in_background()
+        popen.assert_not_called()
+
+    def test_the_guard_stops_a_direct_probe_too(self):
+        os.environ["EXAM_FORGE_NO_PROBE"] = "1"
+        marker = self.home / "ran"
+        self.assertIsNone(self.probe(f': > "{marker}"'))
+        self.assertFalse(marker.exists())
 
     def test_no_cli_is_unknown(self):
         self.assertIsNone(json.loads(self.cli("models", "--probe", path="/nonexistent").stdout)["opus"])

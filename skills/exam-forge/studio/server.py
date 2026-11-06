@@ -4,16 +4,21 @@ Binds to 127.0.0.1 only. Checks the Host header on every request, and requires a
 same-origin session token for every POST. The server never runs agents: a job from
 the form goes to a Claude Code session that is waiting in `forge.py intake wait`.
 The file browser shows only folders and PDFs, and only to the page holding the token.
+
+The newest Studio writes its address to studio.json, and an older one that finds it there
+stops by itself once nothing needs it. A Studio only ever stops itself, on its own checks.
 """
 import hashlib
+import http.client
 import json
+import os
 import secrets
+import selectors
 import socket
 import sys
 import threading
 import time
-import urllib.error
-import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -37,7 +42,12 @@ HIDDEN_FIELDS = {"transcript", "tool_use_id"}
 # Changes with the code, so a Studio left running by an older version is never reused.
 BUILD = hashlib.sha1((HERE / "server.py").read_bytes() + Path(forge.__file__).read_bytes()).hexdigest()[:10]
 IDLE_SECONDS = 30 * 60
+RETIRE_SECONDS = 60  # a replaced Studio goes this long after its last request, the time a window takes to open
+JOB_SECONDS = 15 * 60  # a run this quiet is no longer active, as ACTIVE_MS in app.js
+WATCH_SECONDS = 30
 PAGE_SEEN_SECONDS = 6  # the page polls /api/intake every 2 seconds
+HEARTBEAT_SECONDS = 20  # keeps the page's open connection from timing out
+MAX_HELD_PAGES = 3  # Chrome allows 6 connections per host; more held pages would freeze every page. The rest count by polling
 PORT_RANGE = 30
 MAX_UPLOAD_BYTES = 200 * 1024 * 1024
 UPLOAD_CHUNK = 1024 * 1024
@@ -51,9 +61,9 @@ def known_runs():
     p = forge.config_dir() / "runs.json"
     try:
         runs = json.loads(p.read_text(encoding="utf-8")) if p.is_file() else []
-    except ValueError:
+        return [Path(r) for r in runs if isinstance(r, str) and (Path(r) / "plan.json").is_file()]
+    except (OSError, TypeError, ValueError):
         return []
-    return [Path(r) for r in runs if (Path(r) / "plan.json").is_file()]
 
 
 def read_events(run):
@@ -88,6 +98,18 @@ def open_ask():
         if ask:
             return {**ask, "run": run_id(run)}
     return None
+
+
+def job_in_progress():
+    if open_ask():
+        return True
+    for run in known_runs()[:5]:
+        try:
+            if time.time() - (run / "events.jsonl").stat().st_mtime < JOB_SECONDS:
+                return True
+        except OSError:
+            continue
+    return False
 
 
 def public(event):
@@ -143,13 +165,42 @@ class Handler(BaseHTTPRequestHandler):
         values = forge.load_settings()
         return {"schema": forge.load_schema(), "values": values, "team": forge.resolve_team(values)}
 
+    def hold_page(self):
+        """Held open by the page until its window closes. Timers of a hidden or minimized
+        page can stop for minutes, so polling alone cannot prove that nobody is there."""
+        if not self.server.holds.acquire(blocking=False):
+            self.send_response(204)  # EventSource does not retry this; the page still polls /api/intake
+            self.end_headers()
+            return
+        try:
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.server.pages.add(self)
+            with selectors.DefaultSelector() as ready:
+                ready.register(self.connection, selectors.EVENT_READ)
+                while True:
+                    if not ready.select(HEARTBEAT_SECONDS):
+                        self.wfile.write(b": here\n\n")
+                    elif not self.connection.recv(1):
+                        return
+        except OSError:
+            pass
+        finally:
+            self.server.pages.discard(self)
+            self.server.holds.release()
+            self.server.touch()
+
     def do_GET(self):
-        self.server.touch()
         if not self.allowed_host():
             return self.send_json({"error": "forbidden host"}, 403)
         url = urlparse(self.path)
         q = parse_qs(url.query)
         wanted = q.get("run", [""])[0]
+        # Every new Studio pings all the others: only a caller that can use this one keeps it alive.
+        if url.path != "/api/ping" or q.get("build") == [BUILD]:
+            self.server.touch()
         if url.path == "/icon.png":
             data = app_icon.png(128)
             self.send_response(200)
@@ -173,8 +224,12 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(data)
         elif url.path == "/api/ping":
-            self.send_json({"app": "exam-forge", "build": BUILD,
-                            "watching": time.time() - self.server.page_seen < PAGE_SEEN_SECONDS})
+            self.send_json({"app": "exam-forge", "build": BUILD, "pid": os.getpid(),
+                            "watching": self.server.page_open()})
+        elif url.path == "/api/presence":
+            if not secrets.compare_digest(q.get("token", [""])[0].encode(), self.server.token.encode()):
+                return self.send_json({"error": "bad token"}, 403)
+            self.hold_page()
         elif url.path == "/api/runs":
             self.send_json({"runs": [run_summary(r) for r in known_runs()]})
         elif url.path == "/api/events":
@@ -198,11 +253,18 @@ class Handler(BaseHTTPRequestHandler):
             except forge.SettingsError as e:
                 self.send_json({"error": str(e)}, 500)
         elif url.path == "/api/doctor":
-            self.send_json(forge.doctor())
+            try:
+                self.send_json(forge.doctor())
+            except forge.SettingsError as e:
+                self.send_json({"error": str(e)}, 500)
         elif url.path == "/api/intake":
-            self.server.page_seen = time.time()
+            self.server.page_seen = time.monotonic()
+            try:
+                defaults = forge.default_team(forge.load_settings())
+            except forge.SettingsError:
+                defaults = None  # the page keeps its choices, and Settings and a job show the reason
             self.send_json({"session": forge.session_waiting(), "request": forge.intake_request(),
-                            "ask": open_ask(), "defaults": forge.default_team(forge.load_settings())})
+                            "ask": open_ask(), "defaults": defaults})
         elif url.path == "/book":
             n = q.get("n", ["0"])[0]
             self.send_book(self.find_run(wanted), int(n) if n.isdigit() else -1)
@@ -230,9 +292,16 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json({"error": "not found"}, 404)
         try:
             length = int(self.headers.get("Content-Length", "0"))
-            route(json.loads(self.rfile.read(min(length, 65536)).decode("utf-8") or "{}"))
-        except (forge.SettingsError, KeyError, ValueError) as e:
+            if length > 65536:  # never wait for a body that will not arrive
+                raise forge.SettingsError("the request is too large")
+            body = json.loads(self.rfile.read(max(0, length)).decode("utf-8") or "{}")
+            if not isinstance(body, dict):
+                raise forge.SettingsError("the request body must be a JSON object")
+            route(body)
+        except (forge.SettingsError, KeyError, ValueError, TypeError, AttributeError) as e:
             self.send_json({"ok": False, "error": str(e)}, 400)
+        except OSError as e:
+            self.send_json({"ok": False, "error": str(e)}, 500)
 
     def post_setting(self, body):
         key = body["key"]
@@ -271,7 +340,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_json(forge.plan_estimate(body, forge.load_settings()))
 
     def post_sources(self, body):
-        self.send_json({"ok": True, "pdfs": forge.expand_sources(body["paths"])})
+        skipped = []
+        self.send_json({"ok": True, "pdfs": forge.expand_sources(body["paths"], skipped), "skipped": skipped})
 
     def post_upload(self, query):
         """Save one dropped PDF. The body is the raw file, not JSON."""
@@ -281,9 +351,9 @@ class Handler(BaseHTTPRequestHandler):
             if not 0 < length <= MAX_UPLOAD_BYTES:
                 return self.send_json({"ok": False, "error": "too_large"}, 413)
             target = forge.upload_target(query.get("batch", [""])[0], query.get("name", [""])[0])
-        except (forge.SettingsError, ValueError) as e:
+        except (forge.SettingsError, OSError, ValueError) as e:
             return self.send_json({"ok": False, "error": str(e)}, 400)
-        tmp = target.with_name(f".{target.name}.part")
+        tmp = target.with_name(f".{secrets.token_hex(8)}.part")
         try:
             with open(tmp, "wb") as f:
                 while length > 0:
@@ -297,9 +367,10 @@ class Handler(BaseHTTPRequestHandler):
                     raise forge.SettingsError(f"not a PDF: {target.name}")
             tmp.replace(target)
         except (forge.SettingsError, OSError) as e:
+            forge.remove_quiet(target)  # the empty file that held its name
             return self.send_json({"ok": False, "error": str(e)}, 400)
         finally:
-            tmp.unlink(missing_ok=True)
+            forge.remove_quiet(tmp)
             try:
                 target.parent.rmdir()  # only an empty batch folder goes
             except OSError:
@@ -313,24 +384,77 @@ class Server(ThreadingHTTPServer):
     def __init__(self, addr):
         super().__init__(addr, Handler)
         self.token = secrets.token_urlsafe(24)
-        self.last_seen = time.time()
-        self.page_seen = 0
+        self.last_seen = time.monotonic()  # on a Mac this clock stops while the computer sleeps
+        self.page_seen = -PAGE_SEEN_SECONDS
+        self.pages = set()
+        self.holds = threading.Semaphore(MAX_HELD_PAGES)
 
     def touch(self):
-        self.last_seen = time.time()
+        self.last_seen = time.monotonic()
+
+    def page_open(self):
+        return bool(self.pages) or time.monotonic() - self.page_seen < PAGE_SEEN_SECONDS
+
+    def replaced(self):
+        """True when studio.json names another Studio and that one answers."""
+        mark = read_mark()
+        return mark.get("pid") not in (None, os.getpid()) and ping(mark["port"]).get("pid") == mark["pid"]
+
+    def should_stop(self):
+        """Never with a page open or a job in progress. A waiting session is not a job: it
+        talks through files, so while it waits the newest Studio is enough."""
+        quiet = time.monotonic() - self.last_seen
+        if quiet < RETIRE_SECONDS or self.page_open() or job_in_progress():
+            return False
+        return (quiet > IDLE_SECONDS and not forge.session_waiting()) or self.replaced()
+
+    def watch(self):
+        """Stops the Studio when it should. A check that fails is tried again on the next round."""
+        while True:
+            time.sleep(WATCH_SECONDS)
+            try:
+                stop = self.should_stop()
+            except Exception:
+                continue
+            if stop:
+                self.shutdown()
+                return
+
+
+def mark_file():
+    return forge.config_dir() / "studio.json"
+
+
+def read_mark():
+    """studio.json, or {} unless it holds a whole port and pid."""
+    mark = forge.read_quiet(mark_file())
+    good = isinstance(mark, dict) and type(mark.get("port")) is int and type(mark.get("pid")) is int
+    return mark if good and 0 < mark["port"] < 65536 else {}
+
+
+def ping(port):
+    try:
+        with forge.LOCAL.open(f"http://127.0.0.1:{port}/api/ping?build={BUILD}", timeout=1) as r:
+            d = json.load(r)
+            return d if isinstance(d, dict) and d.get("app") == "exam-forge" else {}
+    except (http.client.HTTPException, OSError, ValueError):
+        return {}
 
 
 def is_studio(port):
-    try:
-        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/ping", timeout=1) as r:
-            d = json.load(r)
-            return d.get("app") == "exam-forge" and d.get("build") == BUILD
-    except (urllib.error.URLError, OSError, ValueError):
-        return False
+    return ping(port).get("build") == BUILD
 
 
 def find_studio(start):
-    return next((p for p in range(start, start + PORT_RANGE) if is_studio(p)), 0)
+    """The newest Studio first, so that a running one is found without pinging the rest. The
+    rest go together: a port that accepts and never answers costs a whole ping timeout, not a
+    connect timeout, so one after the other a range of those took half a minute."""
+    ports = range(start, start + PORT_RANGE)
+    newest = read_mark().get("port")
+    if newest in ports and is_studio(newest):
+        return newest
+    with ThreadPoolExecutor(PORT_RANGE) as pool:
+        return next((p for p, found in zip(ports, list(pool.map(is_studio, ports))) if found), 0)
 
 
 def free_port(start):
@@ -349,21 +473,20 @@ def main(port=8765, open_browser=True):
     if running:
         url = f"http://127.0.0.1:{running}"
         print(f"Exam Forge Studio is already running: {url}", flush=True)
-        if open_browser:
+        if open_browser and not forge.page_open(url):
             forge.open_window(url)
         return
-    server = Server(("127.0.0.1", free_port(port)))
+    free = free_port(port)
+    if not free:  # a port outside the range would never be found again, and each start would add a Studio
+        forge.fail(f"no free port from {port} to {port + PORT_RANGE - 1}; set studio_port to another one")
+    server = Server(("127.0.0.1", free))
     url = f"http://127.0.0.1:{server.server_address[1]}"
+    try:
+        forge.write_atomic(mark_file(), {"pid": os.getpid(), "port": server.server_address[1], "build": BUILD})
+    except OSError:
+        pass  # only a shortcut: find_studio also scans the range
     print(f"Exam Forge Studio: {url}", flush=True)
-
-    def watch_idle():
-        while True:
-            time.sleep(30)
-            if time.time() - server.last_seen > IDLE_SECONDS and not forge.session_waiting() and not open_ask():
-                server.shutdown()
-                return
-
-    threading.Thread(target=watch_idle, daemon=True).start()
+    threading.Thread(target=server.watch, daemon=True).start()
     if open_browser:
         threading.Timer(0.3, forge.open_window, [url]).start()
     server.serve_forever()

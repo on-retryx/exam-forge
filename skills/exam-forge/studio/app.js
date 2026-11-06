@@ -502,16 +502,20 @@
     return { [moved]: to, [a]: first, [b]: rest - first };
   }
 
+  /* An arrow key moves an off-step value by 1, so the nearest step can lie behind it: go on to the next step that way. */
+  const snapStep = (from, to) => to === from ? from : (to < from ? Math.floor : Math.ceil)(to / 5) * 5;
+
   function mixSliders(value, onChange) {
     const box = document.createElement("div"); box.className = "mix";
     let mix = { easy: Math.round(value.easy * 100), medium: Math.round(value.medium * 100), hard: Math.round(value.hard * 100) };
     const rows = {};
-    const show = () => Object.entries(rows).forEach(([k, r]) => { r.input.value = mix[k]; r.out.textContent = `%${mix[k]}`; });
+    /* A saved mix need not be in 5% steps; the step follows it so that the thumb sits at the shown value. */
+    const show = () => Object.entries(rows).forEach(([k, r]) => { r.input.step = mix[k] % 5 ? 1 : 5; r.input.value = mix[k]; r.out.textContent = `%${mix[k]}`; });
     ["easy", "medium", "hard"].forEach((k) => {
       const l = document.createElement("label"), name = document.createElement("span"), out = document.createElement("output");
       const i = document.createElement("input");
       name.textContent = T(k); i.type = "range"; i.min = 0; i.max = 100; i.step = 5; i.setAttribute("aria-label", T(k));
-      i.oninput = () => { mix = rebalance(mix, k, +i.value); show(); };
+      i.oninput = () => { mix = rebalance(mix, k, snapStep(mix[k], +i.value)); show(); };
       i.onchange = () => onChange({ easy: mix.easy / 100, medium: mix.medium / 100, hard: mix.hard / 100 });
       rows[k] = { input: i, out }; l.append(name, i, out); box.append(l);
     });
@@ -773,7 +777,7 @@
   }
 
   async function checkBoot() {
-    try { boot.items = (await getJson("/api/doctor")).items; } catch (e) { boot.items = []; }
+    try { boot.items = (await getJson("/api/doctor")).items || []; } catch (e) { boot.items = []; }
     renderBoot();
   }
 
@@ -811,7 +815,8 @@
       }
       renderJob();
       showAsk(d.ask);
-    } catch (e) { /* server gone */ }
+      $("gone").hidden = true;
+    } catch (e) { $("gone").hidden = await fetch("/api/ping").then(() => true, () => false); }
   }
 
   $("job-format").onchange = renderJob;
@@ -908,7 +913,7 @@
     places.innerHTML = "";
     browse.places.forEach((pl) => {
       const b = document.createElement("button");
-      b.type = "button"; b.className = "chip"; b.textContent = T("place_" + pl.key); b.onclick = () => browseTo(pl.path);
+      b.type = "button"; b.className = "chip"; b.textContent = pl.label || T("place_" + pl.key); b.onclick = () => browseTo(pl.path);
       places.append(b);
     });
     const list = $("browse-list");
@@ -957,6 +962,7 @@
     if (!d.ok) { $("browse-error").textContent = /^no PDFs/.test(d.error) ? `${T("err_no_pdfs")} (${baseName(d.error)})` : d.error; return; }
     addPdfs(d.pdfs);
     $("browse").close();
+    if (d.skipped.length) $("job-error").textContent = fill("skipped_pdfs", { names: d.skipped.join(", ") });
   };
   $("job-cancel").onclick = async () => {
     const d = await postJson("/api/cancel", {});
@@ -994,6 +1000,7 @@
       x.setAttribute("aria-selected", String(x.dataset.tab === name));
       $(x.dataset.tab + "-tab").hidden = x.dataset.tab !== name;
     });
+    office.wake();
   }
   document.querySelectorAll("[data-tab]").forEach((b) => { b.onclick = () => showTab(b.dataset.tab); });
   $("lang").onclick = () => { st.lang = st.lang === "tr" ? "en" : "tr"; store.set("forge.lang", st.lang); applyStaticText(); };
@@ -1007,7 +1014,9 @@
     await loadRun(st.selected, r && isActive(r) ? "live" : "past");
   };
 
+  let presence;
   (async function start() {
+    presence = new EventSource(`/api/presence?token=${encodeURIComponent(TOKEN)}`);  // tells the Studio a window is open
     applyTheme();
     try { st.settings = await getJson("/api/settings"); office.speech = st.settings.values.studio_speech_bubbles; } catch (e) { /* shown empty */ }
     applyStaticText();
