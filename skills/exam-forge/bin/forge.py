@@ -339,6 +339,31 @@ SOURCE_REFERENCES = {
         r"görselde", r"için verilen", r"yukarıda verilen", r"için belirtilen", r"yukarıda belirtilen",
     ],
 }
+SOURCE_KINDS = ["text", "figure", "handwriting"]
+FIGURE_WORDS = "figure|diagram|chart|illustration|graph|plot|image|picture|photo|photograph|drawing|sketch"
+FIGURE_WORDS_TR = "şekil|grafik|diyagram|görsel|resim|çizim"
+FIGURE_POINTER = r"(?: (?:shown|above|below|here|beside))"
+NOT_A_VALUE = r"(?! (?:given|stated|listed) for\b)"
+# Pointing at a figure: wrong in a question that has none, and fine in one printed beside it. A word alone is not
+# enough: "the graph of f", "a figure of speech" and Turkish "bu şekilde" (in this way) are ordinary language.
+FIGURE_REFERENCES = {
+    "en": [
+        rf"\b(?:according to|based on|(?:as )?(?:shown|given|labell?ed|marked|depicted|illustrated) (?:in|on)|in|on|from) "
+        rf"(?:the|this) (?:{FIGURE_WORDS})\b(?! of\b){NOT_A_VALUE}{FIGURE_POINTER}*",
+        rf"\b(?:the|this|that) (?:figure|diagram|chart|illustration|drawing)\b(?! of (?:speech|accounts)\b){NOT_A_VALUE}{FIGURE_POINTER}*",
+        rf"\b(?:the|this|that) (?:{FIGURE_WORDS}|curve){FIGURE_POINTER}+",
+        rf"\bthe (?:above|preceding|following) (?:{FIGURE_WORDS}|curve)\b",
+    ],
+    "tr": [
+        rf"\b(?:yukarıda|aşağıda) (?:verilen|gösterilen) (?:{FIGURE_WORDS_TR}|grafiğ|resm)\w*",
+        r"\b(?:şekle|grafiğe|diyagrama|görsele|resme|çizime) göre",
+        r"\b(?:grafik|diyagram|görsel|resim|çizim)(?:t[ae]|d[ae])(?:ki)?\b",
+        r"\bşekildeki\b",
+        r"\bşekilde (?:gösterilen|görülen|verilen|yer alan|işaretli|belirtilen)",
+        r"\b(?:yukarıdaki|aşağıdaki|yandaki|verilen) (?:şekil\b|şekl|grafi[kğ]|diyagram|görsel|resim|resm|çizim)\w*",
+    ],
+}
+PNG_START, PNG_END = b"\x89PNG\r\n\x1a\n", b"IEND\xaeB`\x82"
 BROWSER_CANDIDATES = [
     "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
     "/Applications/Chromium.app/Contents/MacOS/Chromium",
@@ -1047,16 +1072,67 @@ def cmd_plan(a):
 
 
 # ---------- check ----------
-def source_reference(text):
-    for lang in SOURCE_REFERENCES.values():
-        for rx in lang:
-            m = re.search(rx, text, re.IGNORECASE)
-            if m:
-                return m.group(0)
+def source_reference(text, figure=False):
+    """The first words that point at the source. A question with a figure may point at that figure only, so
+    those words go first, and whatever else they lean on ("the figure on page 12") is still caught."""
+    pointers = [rx for lang in FIGURE_REFERENCES.values() for rx in lang]
+    for rx in pointers if figure else []:
+        text = re.sub(rx, " ", text, flags=re.IGNORECASE)
+    for rx in [rx for lang in SOURCE_REFERENCES.values() for rx in lang] + ([] if figure else pointers):
+        m = re.search(rx, text, re.IGNORECASE)
+        if m:
+            return m.group(0)
     return None
 
 
-def question_errors(q, fmt=None, page_range=None, mcq_options=None):
+def read_figure(fig, base):
+    """The image bytes of a figure. Raises ValueError with the reason: a book never gets a broken image."""
+    name = fig["file"]
+    try:
+        data = (Path(base) / str(name)).read_bytes()
+    except OSError:
+        raise ValueError(f"figure file '{name}' cannot be read (looked in {base})")
+    if not (data.startswith(PNG_START) and data.endswith(PNG_END)):
+        raise ValueError(f"figure file '{name}' is not a complete PNG image")
+    return data
+
+
+def figure_errors(q, page_range=None, base=None):
+    """`base` is the folder of the file that holds the question, when there is one."""
+    qid = q.get("id", "?")
+    src = q.get("source") if isinstance(q.get("source"), dict) else {}
+    kind, fig = src.get("kind"), q.get("figure")
+    e = []
+    if kind is not None and kind not in SOURCE_KINDS:
+        e.append(f"{qid}: invalid source.kind '{kind}'")
+    if fig is None:
+        if kind == "figure":
+            e.append(f"{qid}: source.kind is 'figure' but the question has no figure")
+        return e
+    if kind != "figure":
+        e.append(f"{qid}: a question with a figure needs source.kind 'figure'")
+    if not isinstance(fig, dict):
+        return e + [f"{qid}: figure must be {{id, page, file, caption}}"]
+    if not fig.get("id"):
+        e.append(f"{qid}: figure has no id")
+    page = fig.get("page")
+    if not isinstance(page, int) or isinstance(page, bool):
+        e.append(f"{qid}: figure page must be a whole number")
+    elif page_range and not (page_range[0] <= page <= page_range[1]):
+        e.append(f"{qid}: figure page {page} is outside chunk range {page_range}")
+    if not isinstance(fig.get("caption", ""), str):
+        e.append(f"{qid}: figure caption must be text")
+    if not fig.get("file"):
+        e.append(f"{qid}: figure has no file")
+    elif base is not None:
+        try:
+            read_figure(fig, base)
+        except ValueError as why:
+            e.append(f"{qid}: {why}")
+    return e
+
+
+def question_errors(q, fmt=None, page_range=None, mcq_options=None, base=None):
     e = []
     qid = q.get("id", "?")
     for field in ["id", "section", "type", "difficulty", "question", "answer", "explanation", "source", "quote"]:
@@ -1086,7 +1162,10 @@ def question_errors(q, fmt=None, page_range=None, mcq_options=None):
     if t == "blank" and "____" not in str(q.get("question", "")):
         e.append(f"{qid}: a blank question must contain '____'")
     text = " ".join([str(q.get("question", ""))] + [str(v) for v in (q.get("options") or {}).values()])
-    ref = source_reference(text)
+    fig = q.get("figure")
+    if isinstance(fig, dict):
+        text += f' {fig.get("caption", "")}'  # printed beside the question
+    ref = source_reference(text, figure=fig is not None)
     if ref:
         e.append(f"{qid}: reference to the source: '{ref}'")
     src = q.get("source") or {}
@@ -1094,7 +1173,7 @@ def question_errors(q, fmt=None, page_range=None, mcq_options=None):
         e.append(f"{qid}: source must be {{pdf, section, page(int)}}")
     elif page_range and not (page_range[0] <= src["page"] <= page_range[1]):
         e.append(f"{qid}: source page {src['page']} is outside chunk range {page_range}")
-    return e
+    return e + figure_errors(q, page_range, base)
 
 
 def parse_split(text):
@@ -1124,8 +1203,11 @@ def cmd_check(a):
     texts = [str(q.get("question", "")).strip().lower() for q in questions]
     if len(set(texts)) != len(texts):
         errors.append("identical question text repeated")
+    base = Path(a.json).expanduser().resolve().parent
     for q in questions:
-        errors += question_errors(q, fmt, page_range, a.mcq_options or S["mcq_options"])
+        errors += question_errors(q, fmt, page_range, a.mcq_options or S["mcq_options"], base)
+        if q.get("figure") is not None and not S["figure_questions"]:
+            errors.append(f"{q.get('id', '?')}: figure questions are turned off (figure_questions)")
     count = {z: sum(1 for q in questions if q.get("difficulty") == z) for z in DIFFICULTIES}
     reduced = False
     if a.expected:
