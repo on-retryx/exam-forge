@@ -29,7 +29,7 @@ Extract PDF paths and notes from the arguments and attachments.
 ```bash
 python3 "$FORGE" intake open --pdf "<pdf1>" --pdf "<pdf2>" --notes "<notes>"
 ```
-Leave out `--pdf` and `--notes` when you have none: the user chooses PDFs in the form. It starts the Studio, opens the browser and prints `{"url": ...}`. Give the user that URL in one line. Then start the wait with the Bash tool's `run_in_background: true`, and end your turn without polling:
+Leave out `--pdf` and `--notes` when you have none: the user adds files or folders in the form. `--pdf` also takes a folder the user named. It starts the Studio, opens the browser and prints `{"url": ...}`. Give the user that URL in one line. Then start the wait with the Bash tool's `run_in_background: true`, and end your turn without polling:
 ```bash
 python3 "$FORGE" intake wait
 ```

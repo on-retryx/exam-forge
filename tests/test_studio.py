@@ -8,6 +8,7 @@ import tempfile
 import time
 import unittest
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -184,7 +185,8 @@ class Studio(unittest.TestCase):
     def test_job_post_needs_token(self):
         proc = self.waiter()
         self.assertEqual(self.post(self.job(), token="wrong", path="/api/jobs")[0], 403)
-        self.assertEqual(self.post({}, token="wrong", path="/api/pick")[0], 403)
+        self.assertEqual(self.post({}, token="wrong", path="/api/browse")[0], 403)
+        self.assertEqual(self.post({"paths": []}, token="wrong", path="/api/sources")[0], 403)
         self.assertIsNone(proc.poll())
 
     def test_cancel_ends_the_wait(self):
@@ -224,6 +226,88 @@ class Studio(unittest.TestCase):
         out, _ = proc.communicate(timeout=10)
         self.assertEqual((proc.returncode, out.strip()), (0, "go"))
         self.assertIsNone(self.intake()["ask"])
+
+    def sources(self):
+        base = self.home / "courses"
+        (base / "week1").mkdir(parents=True, exist_ok=True)
+        (base / ".hidden").mkdir(exist_ok=True)
+        for f in ("a.pdf", "week1/b.PDF", ".hidden/c.pdf"):
+            (base / f).write_bytes(b"%PDF-1.4\n")
+        (base / "notes.txt").write_text("skip me")
+        return base
+
+    def test_browse_shows_only_folders_and_pdfs(self):
+        base = self.sources()
+        code, d = self.post({"path": str(base)}, path="/api/browse")
+        self.assertEqual(code, 200)
+        self.assertEqual([e["name"] for e in d["entries"]], ["week1", "a.pdf"])
+        self.assertEqual(d["parent"], str(base.resolve().parent))
+        self.assertEqual(self.post({}, path="/api/browse")[1]["path"], str(self.home.resolve()))
+        self.assertEqual(self.post({"path": str(base / "gone")}, path="/api/browse")[0], 400)
+        d = self.post({"path": str(base / "a.pdf")}, path="/api/browse")[1]
+        self.assertEqual(Path(d["file"]).name, "a.pdf")
+
+    def test_sources_expand_folders_and_files(self):
+        base = self.sources()
+        code, d = self.post({"paths": [str(base), str(base / "a.pdf")]}, path="/api/sources")
+        self.assertEqual(code, 200)
+        self.assertEqual(sorted(Path(p).name for p in d["pdfs"]), ["a.pdf", "b.PDF"])
+        empty = base / "empty"
+        empty.mkdir(exist_ok=True)
+        self.assertEqual(self.post({"paths": [str(empty)]}, path="/api/sources")[0], 400)
+        self.assertEqual(self.post({"paths": [str(base / "notes.txt")]}, path="/api/sources")[0], 400)
+
+    def upload(self, data, name, batch="123", token=None):
+        q = urllib.parse.urlencode({"batch": batch, "name": name})
+        req = urllib.request.Request(f"http://127.0.0.1:{self.port}/api/upload?{q}", data=data, method="POST")
+        req.add_header("Origin", f"http://127.0.0.1:{self.port}")
+        req.add_header("X-Forge-Token", token if token is not None else self.token())
+        try:
+            with urllib.request.urlopen(req, timeout=3) as r:
+                return r.status, json.loads(r.read())
+        except urllib.error.HTTPError as e:
+            return e.code, json.loads(e.read())
+
+    def test_upload_saves_a_pdf_without_overwriting(self):
+        code, d = self.upload(b"%PDF-1.4 x", "ders notu.pdf")
+        self.assertEqual(code, 200, d)
+        first = Path(d["path"])
+        self.assertEqual(first.parent, self.home / "Exam Forge" / "123")
+        self.assertEqual(first.read_bytes(), b"%PDF-1.4 x")
+        self.assertEqual(Path(self.upload(b"%PDF-1.4 y", "ders notu.pdf")[1]["path"]).name, "ders notu-2.pdf")
+
+    def test_upload_rejects_bad_input(self):
+        self.assertEqual(self.upload(b"%PDF-1.4", "a.pdf", token="wrong")[0], 403)
+        self.assertEqual(self.upload(b"hello", "fake.pdf", batch="456")[0], 400)
+        self.assertEqual(self.upload(b"%PDF-1.4", "a.txt")[0], 400)
+        self.assertEqual(self.upload(b"%PDF-1.4", "a.pdf", batch="../up")[0], 400)
+        code, d = self.upload(b"%PDF-1.4", "../../evil.pdf", batch="789")
+        self.assertEqual(Path(d["path"]).parent.name, "789")
+        self.assertFalse((self.home / "Exam Forge" / "456").exists())
+
+    def test_older_studio_is_not_reused(self):
+        import http.server
+        import threading
+
+        class Old(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b'{"app": "exam-forge"}')
+
+            def log_message(self, *args):
+                pass
+
+        old = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Old)
+        threading.Thread(target=old.serve_forever, daemon=True).start()
+        self.addCleanup(old.server_close)
+        self.addCleanup(old.shutdown)
+        r = subprocess.run([sys.executable, "-c", (
+            "import sys; sys.path[:0] = [sys.argv[1], sys.argv[2]]\n"
+            "import server; print(server.is_studio(int(sys.argv[3])), server.is_studio(int(sys.argv[4])))")
+            , FORGE.parent.parent / "studio", FORGE.parent, str(old.server_address[1]), str(self.port)],
+            env=self.env, capture_output=True, text=True, timeout=10)
+        self.assertEqual(r.stdout.split(), ["False", "True"], r.stderr)
 
     def test_book_is_served_only_from_render_events(self):
         book = self.home / "lesson-questions.pdf"

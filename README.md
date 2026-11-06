@@ -49,13 +49,15 @@ Or call it directly:
 /exam-forge:exam-forge ~/Courses/week3.pdf ~/Courses/week4.pdf
 ```
 
-The Studio opens on a **New job** form. Choose your PDFs, the format, where answers should go and, for several PDFs, whether to merge them, then press **Start job**. Everything after that happens in the browser: you watch the team, answer any decision it needs, and open the finished book. PDFs and notes you gave the command are already filled in.
+The Studio opens on a **New job** form. Press **Add** to browse your computer and pick files or whole folders, or drop them onto the form. A folder adds every PDF inside it, and you can remove any you do not want. Then choose the format, where answers should go and, for several PDFs, whether to merge them, then press **Start job**. Everything after that happens in the browser: you watch the team, answer any decision it needs, and open the finished book. PDFs and notes you gave the command are already filled in.
 
 The command works from a terminal too:
 
 ```
 claude "/exam-forge:exam-forge"
 ```
+
+Files you add by browsing stay where they are and the book lands next to them. A browser hides the real location of dropped files, so those are copied to `~/Exam Forge/` and the book lands there.
 
 The form needs that Claude Code session to stay open, because the session does the work; the Studio only hands it the job. When a job ends, the session waits for the next one, so you can keep going from the form. To answer in the chat instead, set `studio_job_form` to `false`.
 
@@ -173,7 +175,8 @@ They are stored in `~/.config/exam-forge/settings.json`.
 
 ## Privacy and copyright
 
-- Exam Forge reads only the files you give it. It does not search the web or use other sources. The job form uses your system's own file dialog (or a path you paste) and never lists your folders.
+- Exam Forge reads only the files you give it. It does not search the web or use other sources.
+- The Studio's file browser runs only on this computer and shows only folders and PDF names. It opens a file only when you add it. Dropped files are copied to `~/Exam Forge/`; delete them whenever you like.
 - Your questions stay yours. The run folder sits next to your book, and nothing is copied elsewhere. Your PDFs are processed by Claude as usual in Claude Code.
 - Use only material you have the right to use. Questions include short quotes from the source.
 - The review catches most errors, but it is still AI. Use the book to study. Have a person check it before using it as an official exam.
@@ -194,4 +197,4 @@ claude --plugin-dir .
 
 ## Türkçe özet
 
-**Exam Forge**, ders notu PDF'lerinden yazdırılabilir soru kitabı üreten bir Claude Code eklentisidir. Her soru kaynak sayfa ve birebir alıntı taşır. Ayrı bir reviewer sayfaları kendisi açıp denetler, doğrulanmamış soru kitaba giremez. Sorular PDF'in dilinde yazılır; Türkçe kaynak Türkçe soru verir. Kitap etiketleri ve Studio arayüzü Türkçe de kullanılabilir. Cevaplar kitabın sonuna, sorunun altına ya da bölüm sonuna konabilir. Birden çok PDF tek kitapta birleştirilebilir. `/exam-forge:exam-forge` Studio'da bir iş formu açar; PDF seçimi, ayarlar ve işin takibi tarayıcıdan yapılır, Claude Code oturumu ise açık kalır. Tüm ayarlar Studio'dan ya da `/exam-forge:config` ile değişir. Kurulum: `/plugin install exam-forge --marketplace on-retryx/exam-forge`.
+**Exam Forge**, ders notu PDF'lerinden yazdırılabilir soru kitabı üreten bir Claude Code eklentisidir. Her soru kaynak sayfa ve birebir alıntı taşır. Ayrı bir reviewer sayfaları kendisi açıp denetler, doğrulanmamış soru kitaba giremez. Sorular PDF'in dilinde yazılır; Türkçe kaynak Türkçe soru verir. Kitap etiketleri ve Studio arayüzü Türkçe de kullanılabilir. Cevaplar kitabın sonuna, sorunun altına ya da bölüm sonuna konabilir. Birden çok PDF tek kitapta birleştirilebilir. `/exam-forge:exam-forge` Studio'da bir iş formu açar; dosya ya da klasör ekleme (gezinerek veya sürükle bırakla), ayarlar ve işin takibi tarayıcıdan yapılır, Claude Code oturumu ise açık kalır. Tüm ayarlar Studio'dan ya da `/exam-forge:config` ile değişir. Kurulum: `/plugin install exam-forge --marketplace on-retryx/exam-forge`.

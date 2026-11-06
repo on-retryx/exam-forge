@@ -4,11 +4,13 @@
 
 ### Added
 - New job form in the Studio: run `/exam-forge:exam-forge`, then choose PDFs and options, start the job, answer decisions and open the book from the browser
+- Sources in the form: browse this computer for files and folders, or drop them onto the form (a folder adds every PDF inside it; dropped files are copied to `~/Exam Forge/`)
 - `forge.py intake` and `forge.py ask`, which connect a waiting Claude Code session to the form
 - `studio_job_form` setting; set it to `false` to keep answering in the chat
 
 ### Changed
 - With the form on, the skill no longer asks setup questions in the chat
+- A Studio left running by another version is no longer reused
 
 ## [0.2.0] - 2026-11-06
 

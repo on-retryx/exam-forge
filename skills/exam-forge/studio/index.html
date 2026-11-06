@@ -58,10 +58,10 @@
       <legend data-i18n="job_sources"></legend>
       <div class="field wide">
         <ul id="job-pdfs"></ul>
-        <div class="job-add">
+        <div id="job-drop" class="drop">
+          <p data-i18n="job_drop"></p>
           <button type="button" id="job-pick" class="chip primary" data-i18n="job_pick"></button>
-          <input type="text" id="job-path" data-i18n-label="job_path" placeholder="~/Courses/week3.pdf">
-          <button type="button" id="job-path-add" class="chip" data-i18n="job_add"></button>
+          <p id="job-upload" role="status"></p>
         </div>
       </div>
     </fieldset>
@@ -120,6 +120,26 @@
       </footer>
     </section>
   </div>
+</dialog>
+
+<dialog id="browse" aria-labelledby="browse-title">
+  <header class="console-head">
+    <h2 id="browse-title" data-i18n="browse_title"></h2>
+    <button type="button" id="browse-close" class="chip" data-i18n="close"></button>
+  </header>
+  <div id="browse-places" class="browse-places"></div>
+  <form id="browse-go" class="browse-bar" autocomplete="off">
+    <button type="button" id="browse-up" class="chip" data-i18n="browse_up"></button>
+    <input type="text" id="browse-path" data-i18n-label="browse_path" spellcheck="false">
+    <button type="submit" class="chip" data-i18n="browse_go"></button>
+  </form>
+  <ul id="browse-list"></ul>
+  <footer class="browse-foot">
+    <p id="browse-error" class="err" role="alert"></p>
+    <span id="browse-count"></span>
+    <button type="button" id="browse-here" class="chip" data-i18n="browse_here"></button>
+    <button type="button" id="browse-add" class="chip primary" data-i18n="browse_add"></button>
+  </footer>
 </dialog>
 
 <dialog id="ask" aria-labelledby="ask-text">

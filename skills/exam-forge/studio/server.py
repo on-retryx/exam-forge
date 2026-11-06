@@ -3,13 +3,12 @@
 Binds to 127.0.0.1 only. Checks the Host header on every request, and requires a
 same-origin session token for every POST. The server never runs agents: a job from
 the form goes to a Claude Code session that is waiting in `forge.py intake wait`.
+The file browser shows only folders and PDFs, and only to the page holding the token.
 """
 import hashlib
 import json
 import secrets
-import shutil
 import socket
-import subprocess
 import sys
 import threading
 import time
@@ -35,15 +34,12 @@ STATIC = {
     "/app.js": ("app.js", "text/javascript; charset=utf-8"),
 }
 HIDDEN_FIELDS = {"transcript", "tool_use_id"}
+# Changes with the code, so a Studio left running by an older version is never reused.
+BUILD = hashlib.sha1((HERE / "server.py").read_bytes() + Path(forge.__file__).read_bytes()).hexdigest()[:10]
 IDLE_SECONDS = 30 * 60
-PICK_SECONDS = 10 * 60
-MAC_PICKER = """activate
-set picks to choose file with prompt "PDF" of type {"com.adobe.pdf"} with multiple selections allowed
-set out to ""
-repeat with f in picks
-  set out to out & POSIX path of f & linefeed
-end repeat
-return out"""
+PORT_RANGE = 30
+MAX_UPLOAD_BYTES = 200 * 1024 * 1024
+UPLOAD_CHUNK = 1024 * 1024
 
 
 def run_id(path):
@@ -83,17 +79,6 @@ def run_summary(run):
         "questions": sum(p.get("questions", 0) for p in first.get("pdfs", [])),
         "books": done, "preset": first.get("preset"),
     }
-
-
-def picker_command():
-    """The system's own file dialog. The Studio never lists folders itself."""
-    if sys.platform == "darwin":
-        return ["osascript", "-e", MAC_PICKER]
-    if shutil.which("zenity"):
-        return ["zenity", "--file-selection", "--multiple", "--separator=\n", "--file-filter=PDF | *.pdf *.PDF"]
-    if shutil.which("kdialog"):
-        return ["kdialog", "--getopenfilename", ".", "*.pdf", "--multiple", "--separate-output"]
-    return None
 
 
 def open_ask():
@@ -179,7 +164,7 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(data)
         elif url.path == "/api/ping":
-            self.send_json({"app": "exam-forge"})
+            self.send_json({"app": "exam-forge", "build": BUILD})
         elif url.path == "/api/runs":
             self.send_json({"runs": [run_summary(r) for r in known_runs()]})
         elif url.path == "/api/events":
@@ -204,7 +189,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({"error": str(e)}, 500)
         elif url.path == "/api/intake":
             self.send_json({"session": forge.session_waiting(), "request": forge.intake_request(),
-                            "picker": picker_command() is not None, "ask": open_ask()})
+                            "ask": open_ask()})
         elif url.path == "/book":
             n = q.get("n", ["0"])[0]
             self.send_book(self.find_run(wanted), int(n) if n.isdigit() else -1)
@@ -221,8 +206,12 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json({"error": "forbidden origin"}, 403)
         if not secrets.compare_digest(self.headers.get("X-Forge-Token", ""), self.server.token):
             return self.send_json({"error": "bad token"}, 403)
+        url = urlparse(self.path)
+        if url.path == "/api/upload":
+            return self.post_upload(parse_qs(url.query))
         route = {"/api/settings": self.post_setting, "/api/jobs": self.post_job, "/api/cancel": self.post_cancel,
-                 "/api/answer": self.post_answer, "/api/pick": self.post_pick}.get(urlparse(self.path).path)
+                 "/api/answer": self.post_answer, "/api/browse": self.post_browse,
+                 "/api/sources": self.post_sources}.get(url.path)
         if not route:
             return self.send_json({"error": "not found"}, 404)
         try:
@@ -257,19 +246,44 @@ class Handler(BaseHTTPRequestHandler):
         forge.answer_ask(run, body["id"], body["value"])
         self.send_json({"ok": True})
 
-    def post_pick(self, body):
-        command = picker_command()
-        if not command:
-            return self.send_json({"ok": False, "error": "no_picker"}, 501)
-        if not self.server.picking.acquire(blocking=False):
-            return self.send_json({"ok": False, "error": "busy"}, 409)
+    def post_browse(self, body):
+        self.send_json({"ok": True, **forge.list_folder(body.get("path")), "places": forge.places()})
+
+    def post_sources(self, body):
+        self.send_json({"ok": True, "pdfs": forge.expand_sources(body["paths"])})
+
+    def post_upload(self, query):
+        """Save one dropped PDF. The body is the raw file, not JSON."""
+        self.close_connection = True
         try:
-            r = subprocess.run(command, capture_output=True, text=True, timeout=PICK_SECONDS)
-        except (OSError, subprocess.TimeoutExpired):
-            return self.send_json({"ok": True, "pdfs": []})
+            length = int(self.headers.get("Content-Length", "0"))
+            if not 0 < length <= MAX_UPLOAD_BYTES:
+                return self.send_json({"ok": False, "error": "too_large"}, 413)
+            target = forge.upload_target(query.get("batch", [""])[0], query.get("name", [""])[0])
+        except (forge.SettingsError, ValueError) as e:
+            return self.send_json({"ok": False, "error": str(e)}, 400)
+        tmp = target.with_name(f".{target.name}.part")
+        try:
+            with open(tmp, "wb") as f:
+                while length > 0:
+                    chunk = self.rfile.read(min(length, UPLOAD_CHUNK))
+                    if not chunk:
+                        raise OSError("upload stopped")
+                    f.write(chunk)
+                    length -= len(chunk)
+            with open(tmp, "rb") as f:
+                if f.read(5) != b"%PDF-":
+                    raise forge.SettingsError(f"not a PDF: {target.name}")
+            tmp.replace(target)
+        except (forge.SettingsError, OSError) as e:
+            return self.send_json({"ok": False, "error": str(e)}, 400)
         finally:
-            self.server.picking.release()
-        self.send_json({"ok": True, "pdfs": [p for p in r.stdout.splitlines() if p] if r.returncode == 0 else []})
+            tmp.unlink(missing_ok=True)
+            try:
+                target.parent.rmdir()  # only an empty batch folder goes
+            except OSError:
+                pass
+        self.send_json({"ok": True, "path": str(target)})
 
 
 class Server(ThreadingHTTPServer):
@@ -279,7 +293,6 @@ class Server(ThreadingHTTPServer):
         super().__init__(addr, Handler)
         self.token = secrets.token_urlsafe(24)
         self.last_seen = time.time()
-        self.picking = threading.Lock()
 
     def touch(self):
         self.last_seen = time.time()
@@ -288,13 +301,18 @@ class Server(ThreadingHTTPServer):
 def is_studio(port):
     try:
         with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/ping", timeout=1) as r:
-            return json.load(r).get("app") == "exam-forge"
+            d = json.load(r)
+            return d.get("app") == "exam-forge" and d.get("build") == BUILD
     except (urllib.error.URLError, OSError, ValueError):
         return False
 
 
+def find_studio(start):
+    return next((p for p in range(start, start + PORT_RANGE) if is_studio(p)), 0)
+
+
 def free_port(start):
-    for port in range(start, start + 30):
+    for port in range(start, start + PORT_RANGE):
         with socket.socket() as s:
             try:
                 s.bind(("127.0.0.1", port))
@@ -305,8 +323,9 @@ def free_port(start):
 
 
 def main(port=8765, open_browser=True):
-    if is_studio(port):
-        url = f"http://127.0.0.1:{port}"
+    running = find_studio(port)
+    if running:
+        url = f"http://127.0.0.1:{running}"
         print(f"Exam Forge Studio is already running: {url}", flush=True)
         if open_browser:
             webbrowser.open(url)

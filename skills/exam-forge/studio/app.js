@@ -558,7 +558,7 @@
   /* ---------- job form ---------- */
   const SENT_MS = 3 * 60 * 1000;
   const FORMATS = ["mcq", "open", "mixed", "full-mix"];
-  const form = { pdfs: [], requestId: null, session: false, picker: false, askId: null, sentAt: 0, ready: false };
+  const form = { pdfs: [], requestId: null, session: false, askId: null, sentAt: 0, ready: false, uploading: false };
   const postJson = (u, body) => fetch(u, {
     method: "POST", headers: { "Content-Type": "application/json", "X-Forge-Token": TOKEN }, body: JSON.stringify(body),
   }).then((r) => r.json());
@@ -594,18 +594,19 @@
     list.innerHTML = "";
     form.pdfs.forEach((path) => {
       const li = document.createElement("li"), span = document.createElement("span"), rm = document.createElement("button");
-      span.textContent = path; rm.type = "button"; rm.className = "chip"; rm.textContent = T("job_remove");
+      const folder = document.createElement("small");
+      span.textContent = baseName(path); span.title = path; folder.textContent = path.slice(0, -baseName(path).length); span.append(folder);
+      rm.type = "button"; rm.className = "chip"; rm.textContent = T("job_remove");
       rm.onclick = () => { form.pdfs = form.pdfs.filter((p) => p !== path); $("job-error").textContent = ""; renderJob(); };
       li.append(span, rm); list.append(li);
     });
     list.hidden = !form.pdfs.length;
-    $("job-pick").hidden = !form.picker;
     const fmt = $("job-format").value;
     $("job-options-row").hidden = fmt !== "mcq" && fmt !== "full-mix";
     $("job-merge-row").hidden = form.pdfs.length < 2 || !st.settings || st.settings.values.merge_books !== "ask";
     $("job-session").textContent = form.session ? T("job_ready") : T("job_no_session");
     $("job-session").className = form.session ? "intro" : "intro warn";
-    $("job-start").disabled = !form.session || !form.pdfs.length;
+    $("job-start").disabled = !form.session || !form.pdfs.length || form.uploading;
     $("job-cancel").hidden = !form.session;
   }
 
@@ -639,7 +640,7 @@
   async function pollIntake() {
     try {
       const d = await getJson("/api/intake");
-      form.session = d.session; form.picker = d.picker;
+      form.session = d.session;
       if (d.request && d.request.id !== form.requestId) {
         form.requestId = d.request.id;
         form.pdfs = d.request.pdfs.slice();
@@ -652,18 +653,124 @@
 
   $("job-format").onchange = renderJob;
   $("ask").addEventListener("cancel", (ev) => ev.preventDefault());
-  $("job-pick").onclick = async () => {
-    $("job-error").textContent = "";
-    $("job-pick").disabled = true;
+  /* The browser hides the real path of a dropped file, so drops are uploaded. */
+  const isPdf = (name) => /\.pdf$/i.test(name) && !name.startsWith(".");
+  const readBatch = (reader) => new Promise((ok, no) => reader.readEntries(ok, no));
+  const fileOf = (entry) => new Promise((ok, no) => entry.file(ok, no));
+
+  async function filesIn(entry) {
+    if (entry.name.startsWith(".")) return [];
+    if (entry.isFile) return isPdf(entry.name) ? [await fileOf(entry)] : [];
+    const reader = entry.createReader(), out = [];
+    for (;;) {
+      const batch = await readBatch(reader);
+      if (!batch.length) return out;
+      for (const e of batch) out.push(...await filesIn(e));
+    }
+  }
+
+  async function uploadAll(files) {
+    const note = $("job-upload"), batch = new Date().toISOString().replace(/\D/g, "").slice(0, 14);
+    form.uploading = true; renderJob();
     try {
-      const d = await postJson("/api/pick", {});
-      if (d.ok) addPdfs(d.pdfs); else $("job-error").textContent = errorText(d.error);
-    } finally { $("job-pick").disabled = false; }
-  };
-  $("job-path-add").onclick = () => { addPdfs([$("job-path").value.trim()]); $("job-path").value = ""; };
-  $("job-path").addEventListener("keydown", (ev) => {
-    if (ev.key === "Enter") { ev.preventDefault(); $("job-path-add").click(); }
+      for (let i = 0; i < files.length; i++) {
+        note.textContent = fill("job_uploading", { n: i + 1, total: files.length, name: files[i].name });
+        const res = await fetch(`/api/upload?batch=${batch}&name=${encodeURIComponent(files[i].name)}`, {
+          method: "POST", headers: { "Content-Type": "application/pdf", "X-Forge-Token": TOKEN }, body: files[i],
+        });
+        const d = await res.json();
+        if (!d.ok) { $("job-error").textContent = errorText(d.error); return; }
+        addPdfs([d.path]);
+      }
+    } catch (e) { $("job-error").textContent = T("err_upload"); } finally {
+      note.textContent = ""; form.uploading = false; renderJob();
+    }
+  }
+
+  async function dropped(items) {
+    $("job-error").textContent = "";
+    const picked = items.map((i) => ({ entry: i.webkitGetAsEntry && i.webkitGetAsEntry(), file: i.getAsFile() }));
+    const files = [];
+    try {
+      for (const { entry, file } of picked) {
+        if (entry) files.push(...await filesIn(entry));
+        else if (file && isPdf(file.name)) files.push(file);
+      }
+    } catch (e) { $("job-error").textContent = T("err_upload"); return; }
+    if (!files.length) { $("job-error").textContent = T("err_no_pdfs"); return; }
+    await uploadAll(files);
+  }
+
+  ["dragover", "drop"].forEach((type) => window.addEventListener(type, (ev) => ev.preventDefault()));
+  const zone = $("job-tab");
+  zone.addEventListener("dragover", (ev) => { $("job-drop").classList.add("over"); ev.dataTransfer.dropEffect = "copy"; });
+  zone.addEventListener("dragleave", (ev) => { if (!zone.contains(ev.relatedTarget)) $("job-drop").classList.remove("over"); });
+  zone.addEventListener("drop", (ev) => {
+    $("job-drop").classList.remove("over");
+    dropped([...ev.dataTransfer.items].filter((i) => i.kind === "file"));
   });
+
+  /* ---------- file browser ---------- */
+  const browse = { path: "", parent: null, entries: [], places: [], chosen: new Set() };
+  const baseName = (p) => p.split(/[\\/]/).filter(Boolean).pop() || p;
+
+  function renderBrowser() {
+    $("browse-path").value = browse.path;
+    $("browse-up").disabled = !browse.parent;
+    const places = $("browse-places");
+    places.innerHTML = "";
+    browse.places.forEach((pl) => {
+      const b = document.createElement("button");
+      b.type = "button"; b.className = "chip"; b.textContent = T("place_" + pl.key); b.onclick = () => browseTo(pl.path);
+      places.append(b);
+    });
+    const list = $("browse-list");
+    list.innerHTML = "";
+    if (!browse.entries.length) {
+      const li = document.createElement("li"); li.className = "empty"; li.textContent = T("browse_empty"); list.append(li);
+    }
+    browse.entries.forEach((e) => {
+      const li = document.createElement("li"), box = document.createElement("input"), open = document.createElement("button");
+      box.type = "checkbox"; box.checked = browse.chosen.has(e.path); box.setAttribute("aria-label", e.name);
+      box.onchange = () => { if (box.checked) browse.chosen.add(e.path); else browse.chosen.delete(e.path); renderCount(); };
+      open.type = "button"; open.className = e.dir ? "dir" : "file"; open.textContent = (e.dir ? "▸ " : "") + e.name;
+      open.onclick = () => { if (e.dir) browseTo(e.path); else box.click(); };
+      li.append(box, open); list.append(li);
+    });
+    renderCount();
+  }
+
+  function renderCount() {
+    $("browse-count").textContent = browse.chosen.size ? fill("browse_count", { n: browse.chosen.size }) : "";
+    $("browse-add").disabled = !browse.chosen.size;
+    $("browse-here").disabled = !browse.path || browse.chosen.has(browse.path);
+  }
+
+  async function browseTo(path) {
+    const d = await postJson("/api/browse", { path });
+    $("browse-error").textContent = d.ok ? "" : d.error;
+    if (!d.ok) return;
+    Object.assign(browse, { path: d.path, parent: d.parent, entries: d.entries, places: d.places });
+    if (d.file) browse.chosen.add(d.file);
+    renderBrowser();
+    $("browse-list").scrollTop = 0;
+  }
+
+  $("job-pick").onclick = async () => {
+    browse.chosen.clear();
+    await browseTo(browse.path);
+    $("browse").showModal();
+  };
+  $("browse-close").onclick = () => $("browse").close();
+  $("browse-up").onclick = () => browseTo(browse.parent);
+  $("browse-go").onsubmit = (ev) => { ev.preventDefault(); browseTo($("browse-path").value); };
+  $("browse-here").onclick = () => { browse.chosen.add(browse.path); renderCount(); };
+  $("browse-add").onclick = async () => {
+    const d = await postJson("/api/sources", { paths: [...browse.chosen] });
+    if (!d.ok) { $("browse-error").textContent = /^no PDFs/.test(d.error) ? `${T("err_no_pdfs")} (${baseName(d.error)})` : d.error; return; }
+    addPdfs(d.pdfs);
+    $("browse").close();
+  };
   $("job-cancel").onclick = async () => {
     const d = await postJson("/api/cancel", {});
     if (d.ok) { form.pdfs = []; $("job-notes").value = ""; await pollIntake(); } else $("job-error").textContent = errorText(d.error);

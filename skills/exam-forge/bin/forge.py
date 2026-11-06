@@ -1124,6 +1124,7 @@ def cmd_studio(a):
 # The Studio cannot run agents. A Claude Code session waits here, the browser hands
 # it a job through these files, and everything after that runs as usual.
 FRESH_SECONDS = 10
+MAX_FOLDER_PDFS = 200
 ASK_POLL_SECONDS = 1
 
 
@@ -1180,6 +1181,80 @@ def validate_pdf(raw):
     return str(pdf)
 
 
+def pdfs_under(folder):
+    """PDFs in a folder and its subfolders, skipping hidden entries."""
+    found = []
+    for base, dirs, files in os.walk(folder):
+        dirs[:] = sorted(d for d in dirs if not d.startswith("."))
+        found += [Path(base) / f for f in sorted(files)
+                  if f.lower().endswith(".pdf") and not f.startswith(".")]
+        if len(found) > MAX_FOLDER_PDFS:
+            raise SettingsError(f"more than {MAX_FOLDER_PDFS} PDFs in {folder.name}; choose a smaller folder")
+    return found
+
+
+def expand_sources(paths):
+    """Files and folders the user chose, as a flat list of PDF paths."""
+    out = []
+    for raw in paths:
+        p = Path(str(raw).strip()).expanduser().resolve()
+        if p.is_dir():
+            inside = pdfs_under(p)
+            if not inside:
+                raise SettingsError(f"no PDFs in {p.name}")
+            out += [validate_pdf(str(f)) for f in inside]
+        else:
+            out.append(validate_pdf(str(p)))
+    return list(dict.fromkeys(out))
+
+
+def list_folder(raw):
+    """Folders and PDFs for the Studio's file browser. Other files stay out of it."""
+    p = Path(str(raw or "~").strip() or "~").expanduser().resolve()
+    file = None
+    if p.is_file():
+        file, p = validate_pdf(str(p)), p.parent
+    if not p.is_dir():
+        raise SettingsError(f"folder not found: {p}")
+    try:
+        names = [e for e in os.scandir(p) if not e.name.startswith(".")]
+    except OSError as e:
+        raise SettingsError(f"cannot open {p}: {e.strerror}")
+    entries = []
+    for e in names:
+        try:
+            is_dir = e.is_dir()
+        except OSError:
+            continue
+        if is_dir or e.name.lower().endswith(".pdf"):
+            entries.append({"name": e.name, "path": e.path, "dir": is_dir})
+    entries.sort(key=lambda e: (not e["dir"], e["name"].lower()))
+    return {"path": str(p), "parent": str(p.parent) if p.parent != p else None, "entries": entries, "file": file}
+
+
+def places():
+    home = Path.home()
+    spots = [("home", home), ("desktop", home / "Desktop"), ("documents", home / "Documents"),
+             ("downloads", home / "Downloads"), ("volumes", Path("/Volumes"))]
+    return [{"key": k, "path": str(p)} for k, p in spots if p.is_dir()]
+
+
+def upload_target(batch, name):
+    """Where a dropped PDF goes. A browser hides its real path, so it needs a copy."""
+    if not re.fullmatch(r"[0-9]{1,20}", batch or ""):
+        raise SettingsError("bad upload batch")
+    clean = re.sub(r'[\x00-\x1f/\\:*?"<>|]', "_", Path(str(name).replace("\\", "/")).name).strip()
+    if clean.startswith(".") or not clean.lower().endswith(".pdf"):
+        raise SettingsError(f"not a PDF: {clean}")
+    folder = Path.home() / "Exam Forge" / batch
+    folder.mkdir(parents=True, exist_ok=True)
+    target, n = folder / clean, 1
+    while target.exists():
+        n += 1
+        target = folder / f"{Path(clean).stem}-{n}.pdf"
+    return target
+
+
 def validate_job(body, settings):
     """Clean a job from the form. Only known fields survive."""
     if not isinstance(body, dict):
@@ -1225,10 +1300,9 @@ def ensure_studio():
     """URL of a running Studio, starting one in the background when needed."""
     sys.path.insert(0, str(ROOT / "studio"))
     import server
-    port = S["studio_port"]
-    url = f"http://127.0.0.1:{port}"
-    if server.is_studio(port):
-        return url
+    port = server.find_studio(S["studio_port"])
+    if port:
+        return f"http://127.0.0.1:{port}"
     log = config_dir() / "studio.log"
     log.parent.mkdir(parents=True, exist_ok=True)
     with open(log, "w", encoding="utf-8") as out:
@@ -1247,12 +1321,10 @@ def intake_open(a):
     box = intake_dir()
     for name in ("job.json", "cancel.json"):
         remove_quiet(box / name)
-    pdfs = []
-    for raw in a.pdf or []:
-        try:
-            pdfs.append(validate_pdf(raw))
-        except SettingsError as e:
-            fail(str(e))
+    try:
+        pdfs = expand_sources(a.pdf or [])
+    except SettingsError as e:
+        fail(str(e))
     write_atomic(box / "request.json", {"id": os.urandom(6).hex(), "t": now_iso(), "pdfs": pdfs,
                                         "notes": a.notes or ""})
     url = ensure_studio() + "/?tab=job"
