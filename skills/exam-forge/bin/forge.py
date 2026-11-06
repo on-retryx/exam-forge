@@ -964,6 +964,7 @@ def cmd_plan(a):
         "read_pages_supported": bool(shutil.which("pdftoppm")),
         "team": team,
         "difficulty_mix": S["difficulty_mix"],
+        "handwritten_notes": S["handwritten_notes"],
         **extra,
         "pdfs": plans,
     }
@@ -1069,10 +1070,12 @@ def cmd_check(a):
     if data.get("page_start") and data.get("page_end"):
         page_range = (data["page_start"], data["page_end"])
     run = find_run(a.json)
+    notes_allowed = S["handwritten_notes"]
     if run:  # a job can set its own mix; the thin-page rule below must follow it
-        mix = json.loads((run / "plan.json").read_text(encoding="utf-8")).get("difficulty_mix")
-        if mix:
-            use_mix(mix)
+        plan = json.loads((run / "plan.json").read_text(encoding="utf-8"))
+        if plan.get("difficulty_mix"):
+            use_mix(plan["difficulty_mix"])
+        notes_allowed = plan.get("handwritten_notes", notes_allowed)  # settings apply from the next job on
     errors = []
     ids = [q.get("id") for q in questions]
     if len(set(ids)) != len(ids):
@@ -1082,6 +1085,8 @@ def cmd_check(a):
         errors.append("identical question text repeated")
     for q in questions:
         errors += question_errors(q, fmt, page_range, a.mcq_options or S["mcq_options"])
+        if rests_on_note(q) and not notes_allowed:
+            errors.append(f"{q.get('id', '?')}: rests on a handwritten note, but handwritten_notes is off")
     count = {z: sum(1 for q in questions if q.get("difficulty") == z) for z in DIFFICULTIES}
     reduced = False
     if a.expected:
@@ -1110,7 +1115,8 @@ def cmd_check(a):
         if missing and len(questions) >= 8:
             errors.append(f"format '{fmt}' has none of: {sorted(missing)}")
     print(json.dumps({"questions": len(questions), "difficulty": count,
-                      "type": {t: sum(1 for q in questions if q.get("type") == t) for t in TYPES}},
+                      "type": {t: sum(1 for q in questions if q.get("type") == t) for t in TYPES},
+                      "handwriting": sum(1 for q in questions if rests_on_note(q))},
                      ensure_ascii=False))
     run, pdf, chunk = file_context(a.json)
     emit(run, "check", pdf=pdf, chunk=chunk, ok=not errors, questions=len(questions),
@@ -1288,12 +1294,15 @@ def cmd_merge(a):
     title = parts[0]["name"] if titles == "filename" and len(parts) == 1 else a.title
     book = {
         "title": title, "format": a.format, "language": a.language,
-        "date": dt.date.today().isoformat(), "sources": [p["pdf"] for p in parts], "parts": parts,
+        "date": dt.date.today().isoformat(), "sources": [p["pdf"] for p in parts],
+        "handwriting_questions": sum(rests_on_note(q) for p in parts for q in p["questions"]), "parts": parts,
     }
     write_json(a.out, book)
     total = sum(len(p["questions"]) for p in parts)
     emit(find_run(a.dirs[0]), "merge", questions=total, parts=len(parts), title=title)
     print(f"{total} verified questions -> {a.out}")
+    if book["handwriting_questions"]:
+        print(f'{book["handwriting_questions"]} of them rest on handwritten notes')
 
 
 # ---------- render ----------
