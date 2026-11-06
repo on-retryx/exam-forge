@@ -770,19 +770,18 @@ def cmd_render_pages(a):
 
 
 NOTE_KINDS = {"Ink": "ink", "FreeText": "freetext", "Text": "text"}
-NOTE_MARGIN = 12  # points around a crop; ink closer than this counts as one piece of writing
+NOTE_MARGIN = (-12, -12, 12, 12)  # points around a crop; ink closer than this is one piece of writing
 
 
-def join_ink(rects, fitz):
+def join_ink(rects):
     """Many apps save every stroke as its own annotation, and a word only reads in one piece."""
     groups = []
     for rect in rects:
-        grown = rect + (-NOTE_MARGIN, -NOTE_MARGIN, NOTE_MARGIN, NOTE_MARGIN)
-        near = [g for g in groups if g.intersects(grown)]
-        groups = [g for g in groups if not g.intersects(grown)]
-        for g in near:
+        grown = rect + NOTE_MARGIN
+        for g in [g for g in groups if g.intersects(grown)]:
             rect = rect | g
-        groups.append(fitz.Rect(rect))
+            groups.remove(g)
+        groups.append(rect)
     return groups
 
 
@@ -799,15 +798,14 @@ def page_notes(page, fitz, target, dpi):
             ink.append(rect)
         elif annot.info["content"].strip():
             typed.append((rect, {"kind": kind, "text": annot.info["content"].strip()}))
-    found = typed + [(rect, {"kind": "ink"}) for rect in join_ink(ink, fitz)]
+    found = typed + [(rect, {"kind": "ink"}) for rect in join_ink(ink)]
     notes = []
     for n, (rect, note) in enumerate(sorted(found, key=lambda x: (x[0].y0, x[0].x0)), 1):
         id_ = f"note-p{page.number + 1}-{n}"
         note = {"id": id_, "page": page.number + 1, "bbox": [round(v, 1) for v in rect], **note}
         if note["kind"] == "ink":
             path = target / f"{id_}.png"
-            clip = (rect + (-NOTE_MARGIN, -NOTE_MARGIN, NOTE_MARGIN, NOTE_MARGIN)) & page.rect
-            page.get_pixmap(clip=clip, dpi=dpi).save(str(path))
+            page.get_pixmap(clip=(rect + NOTE_MARGIN) & page.rect, dpi=dpi).save(str(path))
             note["file"] = str(path)
         notes.append(note)
     return notes

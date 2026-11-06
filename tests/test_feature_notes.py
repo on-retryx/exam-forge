@@ -253,6 +253,27 @@ class Notes(Base):
         self.assertEqual([x["id"] for x in n], ["note-p1-1", "note-p1-2"])
         self.assertNotEqual(n[0]["file"], n[1]["file"])
 
+    def test_a_stroke_can_join_two_groups(self):
+        def build(d):
+            ink(d[0], [[(100, 100), (150, 105)]])
+            ink(d[0], [[(300, 100), (350, 105)]])
+            ink(d[0], [[(150, 100), (300, 105)]])
+        self.assertEqual(len(self.notes(self.pdf(build))["notes"]), 1)
+
+    def test_a_note_goes_from_the_command_into_the_book(self):
+        def build(d):
+            ink(d[1])
+            d[1].add_text_annot((300, 500), "ATP comes from glycolysis")
+        found = self.notes(self.pdf(build))["notes"]
+        typed = next(n for n in found if n["kind"] == "text")
+        q = question(1, page=typed["page"], kind="handwriting", note=typed["id"], quote=typed["text"], verified=True)
+        path = self.write("lesson/chunk-1.json", chunk([q]))
+        self.assertEqual(self.cli("check", path, "--format", "open").returncode, 0)
+        r = self.cli("merge", self.d / "lesson", "--out", self.d / "book.json", "--title", "T", "--format", "open")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        book = json.loads((self.d / "book.json").read_text(encoding="utf-8"))
+        self.assertIn("handwritten note", forge.build_book_html(book, "book_end")[0])
+
     def test_turkish_text_survives_an_ansi_pipe(self):
         path = self.pdf(lambda d: d[0].add_text_annot((300, 100), "Şişman hücre için ğ"))
         n = self.notes(path, PYTHONIOENCODING="cp1252:strict")["notes"]
