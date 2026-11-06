@@ -7,12 +7,15 @@ Commands:
   team                                  Print the resolved team and models
   pages <pdf>                           Page count
   render-pages <pdf> <3-12> --out DIR   Rasterize pages to PNG (pymupdf or pdftoppm)
+  marks <pdf> <3-12> [--out F]          Highlights, underlines and strikethroughs (needs pymupdf)
+  marks-coverage <chunk.json> <marks.json> [--fail-out F]  Marks with a question; fails on struck text
   plan <pdf>... [--run DIR]             Question counts, difficulty split, chunks
        [--mix 0.2,0.5,0.3]              difficulty shares for this job
        [--team editor=sonnet,...] [--effort editor=high,...] [--budget usd=5]
        [--pages file.pdf=N ...]         give the page count when it cannot be read
   check <chunk.json> [--format F] [--expected easy=2,medium=5,hard=3]
        [--mcq-options 4|5] [--min N]    --min allows a justified thin-page reduction
+       [--marks marks.json]             also fail on a question that rests on struck text
   screen <chunk.json> <screen.json>     Record screener results
   audit-sample <chunk.json> [--rate R]  Pick questions for the chief editor
   source-pages <chunk.json> --ids a,b   Pages (with one page of margin) for those ids
@@ -760,6 +763,124 @@ def cmd_render_pages(a):
         return
     print("ERROR: no page image tool found. Run: forge.py doctor --install pdf_tool", file=sys.stderr)
     sys.exit(4)
+
+
+# ---------- marks ----------
+# Highlight and underline mean important. Only a line through the text means out of scope.
+ANNOTATION_MARKS = {"Highlight": "highlight", "Underline": "underline", "Squiggly": "underline",
+                    "StrikeOut": "strikethrough"}
+MARK_ROLES = {"highlight": "emphasis", "underline": "emphasis", "strikethrough": "excluded"}
+
+
+def page_lines(page):
+    """Text lines with their real baseline, which is what a line's position is measured against."""
+    lines = []
+    for block in page.get_text("rawdict")["blocks"]:
+        for line in block.get("lines", []):
+            spans = [s for s in line["spans"] if s["chars"]]
+            if not spans:
+                continue
+            main = max(spans, key=lambda s: len(s["chars"]))  # a superscript does not move the line
+            lines.append({"upright": line["dir"][0] > 0.99, "baseline": main["origin"][1], "size": main["size"],
+                          "top": line["bbox"][1], "bottom": line["bbox"][3],
+                          "chars": [(c["bbox"], c["c"]) for s in spans for c in s["chars"]]})
+    return lines
+
+
+def tidy(text):
+    return " ".join(text.split())
+
+
+def annotation_quads(annot):
+    points = annot.vertices or []
+    quads = [points[i:i + 4] for i in range(0, len(points) - 3, 4)]
+    return [(min(p[0] for p in q), min(p[1] for p in q), max(p[0] for p in q), max(p[1] for p in q)) for q in quads] \
+        or [tuple(annot.rect)]
+
+
+def annotation_marks(page, lines):
+    """Text comes from the quads: a rectangle around a two-line mark also holds what was not marked."""
+    marks = []
+    for annot in page.annots() or []:
+        kind = ANNOTATION_MARKS.get(annot.type[1])
+        if not kind:
+            continue
+        quads = annotation_quads(annot)
+        parts = ["".join(c for box, c in line["chars"]
+                         if q[0] <= (box[0] + box[2]) / 2 <= q[2] and q[1] <= (box[1] + box[3]) / 2 <= q[3])
+                 for q in quads for line in lines]
+        marks.append({"kind": kind, "origin": "annotation", "text": tidy(" ".join(parts)),
+                      "bbox": [min(q[0] for q in quads), min(q[1] for q in quads),
+                               max(q[2] for q in quads), max(q[3] for q in quads)]})
+    return marks
+
+
+def drop_annotations(page):
+    """The drawing list includes what annotations draw, and those were read already."""
+    annot = page.first_annot
+    while annot:
+        annot = page.delete_annot(annot)
+
+
+def drawn_marks(page, lines):
+    return []
+
+
+def page_marks(page, number):
+    lines = page_lines(page)
+    found = annotation_marks(page, lines)
+    drop_annotations(page)
+    found += drawn_marks(page, page_lines(page))
+    found.sort(key=lambda m: (round((m["bbox"][1] + m["bbox"][3]) / 16), m["bbox"][0]))
+    return [{"id": f"mark-p{number}-{n}", "page": number, "kind": m["kind"], "role": MARK_ROLES[m["kind"]],
+             "origin": m["origin"], "text": m["text"], "bbox": [round(x, 1) for x in m["bbox"]]}
+            for n, m in enumerate(found, 1)]
+
+
+def is_scanned(page):
+    return not page.get_text("text").strip() and bool(page.get_images())
+
+
+def mark_counts(marks):
+    counts = {"total": len(marks)}
+    for field, names in (("role", ("emphasis", "excluded")), ("kind", tuple(MARK_ROLES)),
+                         ("origin", ("annotation", "drawn"))):
+        for name in names:
+            counts[name] = sum(1 for m in marks if m[field] == name)
+    return counts
+
+
+def cmd_marks(a):
+    """Reader's marks in a page range. Pages without a text layer are named for a model to look at."""
+    fitz = load_fitz()
+    if not fitz:
+        print("ERROR: reading marks needs pymupdf. Run: forge.py doctor --install pdf_tool", file=sys.stderr)
+        sys.exit(4)
+    m = re.fullmatch(r"(\d+)(?:-(\d+))?", a.range)
+    if not m or int(m.group(1)) < 1 or int(m.group(2) or m.group(1)) < int(m.group(1)):
+        fail("range must look like '3' or '3-12'")
+    first, last = int(m.group(1)), int(m.group(2) or m.group(1))
+    pdf = Path(a.pdf).expanduser()
+    try:
+        doc = fitz.open(str(pdf))
+    except Exception as e:
+        fail(f"cannot open {pdf}: {e}")
+    if doc.needs_pass:
+        fail(f"{pdf} is protected by a password")
+    marks, scanned = [], []
+    for number in range(first, min(last, doc.page_count) + 1):
+        page = doc[number - 1]
+        if is_scanned(page):
+            scanned.append(number)
+        marks += page_marks(page, number)
+    result = {"pdf": pdf.name, "marks": marks, "counts": mark_counts(marks), "scanned_pages": scanned}
+    if a.out:
+        out = Path(a.out).expanduser()
+        out.parent.mkdir(parents=True, exist_ok=True)
+        write_json(out, result)
+        print(json.dumps({"out": str(out), "counts": result["counts"], "scanned_pages": scanned}, ensure_ascii=False))
+    else:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
 # ---------- plan ----------
@@ -2221,6 +2342,8 @@ def main():
     p = sub.add_parser("render-pages"); p.add_argument("pdf"); p.add_argument("range")
     p.add_argument("--out", required=True); p.add_argument("--dpi", type=int, default=110)
     p.set_defaults(f=cmd_render_pages)
+    p = sub.add_parser("marks"); p.add_argument("pdf"); p.add_argument("range"); p.add_argument("--out")
+    p.set_defaults(f=cmd_marks)
     p = sub.add_parser("plan"); p.add_argument("pdfs", nargs="+"); p.add_argument("--run")
     p.add_argument("--mix"); p.add_argument("--team"); p.add_argument("--effort"); p.add_argument("--budget")
     p.add_argument("--pages", action="append"); p.set_defaults(f=cmd_plan)
