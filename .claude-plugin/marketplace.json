@@ -1,6 +1,6 @@
 {
   "name": "retryx",
-  "owner": {"name": "Retry-X"},
+  "owner": {"name": "RetryX"},
   "plugins": [
     {
       "name": "exam-forge",

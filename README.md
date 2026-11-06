@@ -177,7 +177,7 @@ claude --plugin-dir .
 
 ## License
 
-[MIT](LICENSE) · Retry-X
+[MIT](LICENSE) · RetryX
 
 ---
 
