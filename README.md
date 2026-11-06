@@ -46,6 +46,7 @@ AI can write exam questions quickly. The hard part is trusting them. A model can
 - **Answers where you want them:** at the end of the book, under each question, or at the end of each section
 - **Several PDFs:** one book per PDF, or a single merged book with a cover for each part, named after the file or with a logical title
 - **Any language:** questions follow the language of your PDF. Book labels come in English and Turkish.
+- **Handwritten notes:** legible notes in a PDF count as source material, and the answer cites them. Notes that cannot be read with confidence are never guessed at, and a note like "not on the exam" removes that part instead of becoming a question.
 - **A live Studio:** a local animated office with the team at their desks, progress, reasons for rejections and estimated cost
 
 ### The book
@@ -290,6 +291,7 @@ They are stored in `~/.config/exam-forge/settings.json`.
 | `short_pdf_question_options` | 10, 15 | Counts the editor can pick on short PDFs |
 | `questions_per_page` | 1.0 | For longer PDFs |
 | `thin_page_floor` | 0.6 | Lowest share of the target on thin pages |
+| `handwritten_notes` | true | Questions may rest on legible handwritten notes. Off, only notes about exam scope apply |
 | `quality_preset` | `quality` | `quality`, `balanced` or `economy` |
 | `screener_enabled` | true | Haiku first pass |
 | `chief_sample_rate` | 0.25 | Share of easy and medium questions the chief editor checks |
@@ -328,4 +330,4 @@ New features use a score ratchet, [`tools/ratchet.py`](tools/ratchet.py). Tests 
 
 ## Türkçe özet
 
-**Exam Forge**, ders notu PDF'lerinden yazdırılabilir soru kitabı üreten bir Claude Code eklentisidir. Her soru kaynak sayfa ve birebir alıntı taşır. Ayrı bir reviewer sayfaları kendisi açıp denetler, doğrulanmamış soru kitaba giremez. Sorular PDF'in dilinde yazılır; Türkçe kaynak Türkçe soru verir. Kitap etiketleri ve Studio arayüzü Türkçe de kullanılabilir. Cevaplar kitabın sonuna, sorunun altına ya da bölüm sonuna konabilir. Birden çok PDF tek kitapta birleştirilebilir. `/exam-forge:exam-forge` Studio'da bir iş formu açar; dosya ya da klasör ekleme (gezinerek veya sürükle bırakla), ayarlar ve işin takibi tarayıcıdan yapılır, Claude Code oturumu ise açık kalır. Tüm ayarlar Studio'dan ya da `/exam-forge:config` ile değişir. Kurulum: `/plugin install exam-forge --marketplace on-retryx/exam-forge`. Güncellemeden sonra Claude Code'u yeniden başlatın; güncelleme ancak o zaman geçerli olur.
+**Exam Forge**, ders notu PDF'lerinden yazdırılabilir soru kitabı üreten bir Claude Code eklentisidir. Her soru kaynak sayfa ve birebir alıntı taşır. Ayrı bir reviewer sayfaları kendisi açıp denetler, doğrulanmamış soru kitaba giremez. Sorular PDF'in dilinde yazılır; Türkçe kaynak Türkçe soru verir. Kitap etiketleri ve Studio arayüzü Türkçe de kullanılabilir. Cevaplar kitabın sonuna, sorunun altına ya da bölüm sonuna konabilir. Birden çok PDF tek kitapta birleştirilebilir. El yazısı notlar da kaynak sayılır: okunaklı bir nottan soru çıkabilir ve cevapta bu not gösterilir. Güvenle okunamayan not asla tahmin edilmez; "sınavda yok" gibi notlar ise soru olmaz, o kısmı kapsam dışı bırakır. `handwritten_notes` ayarıyla kapatılabilir. `/exam-forge:exam-forge` Studio'da bir iş formu açar; dosya ya da klasör ekleme (gezinerek veya sürükle bırakla), ayarlar ve işin takibi tarayıcıdan yapılır, Claude Code oturumu ise açık kalır. Tüm ayarlar Studio'dan ya da `/exam-forge:config` ile değişir. Kurulum: `/plugin install exam-forge --marketplace on-retryx/exam-forge`. Güncellemeden sonra Claude Code'u yeniden başlatın; güncelleme ancak o zaman geçerli olur.
