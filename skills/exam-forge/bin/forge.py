@@ -770,6 +770,13 @@ def cmd_render_pages(a):
 ANNOTATION_MARKS = {"Highlight": "highlight", "Underline": "underline", "Squiggly": "underline",
                     "StrikeOut": "strikethrough"}
 MARK_ROLES = {"highlight": "emphasis", "underline": "emphasis", "strikethrough": "excluded"}
+# A drawn line, measured up from the baseline as a share of the font size: from UNDER_DEPTH below it to
+# UNDER_TOP is an underline, from there to STRIKE_TOP runs through the letters, and above that it is neither.
+UNDER_DEPTH, UNDER_TOP, STRIKE_TOP = 0.45, 0.12, 0.62
+THIN_LINE, TALL_BAR = 0.35, 1.9  # bar thickness over font size: a pen line, and the tallest highlight
+MIN_FIT = 0.6  # share of a bar's length that must lie on letters
+PAGE_WIDE, PAGE_RULE, PAGE_MARGIN = 0.85, 0.4, 0.08  # of the page: ignored always, in a margin, the margin's depth
+THIN_POST, THIN_RULE, ROW_GAP = 2.5, 4, 4  # points, points, font sizes between joined rows
 
 
 def page_lines(page):
@@ -822,8 +829,161 @@ def drop_annotations(page):
         annot = page.delete_annot(annot)
 
 
+def is_marker(rgb, opacity):
+    """Highlighter ink: coloured, and see-through or pale. Grey is table shading, dark is a label."""
+    light = 0.3 * rgb[0] + 0.59 * rgb[1] + 0.11 * rgb[2]
+    return max(rgb) - min(rgb) >= 0.08 and (opacity < 0.95 or (max(rgb) >= 0.8 and light >= 0.6))
+
+
+def page_shapes(page):
+    """Horizontal bars that may be marks, and the vertical rules that give a table away."""
+    bars, posts = [], []
+
+    def add(x0, y0, x1, y1, colour, opacity):
+        rgb = tuple(colour) * 3 if len(colour) == 1 else tuple(colour)[:3]
+        if x1 - x0 >= 2 and opacity > 0.02 and min(rgb) < 0.97:  # white on white is not a mark
+            bars.append({"x0": x0, "y0": y0, "x1": x1, "y1": y1, "rgb": rgb, "opacity": opacity})
+
+    def boxes(d):
+        items = d["items"]
+        if all(i[0] in ("re", "qu") for i in items):
+            return [i[1] if i[0] == "re" else i[1].rect for i in items]
+        return [d["rect"]]  # a rounded or hand-built shape counts as its outline
+
+    for d in page.get_drawings():
+        if d["type"] in ("f", "fs") and d.get("fill"):
+            opacity = 1 if d.get("fill_opacity") is None else d["fill_opacity"]
+            for r in boxes(d):
+                if r.width <= THIN_POST and r.height > r.width:
+                    posts.append((r.x0, r.y0, r.y1))
+                else:
+                    add(r.x0, r.y0, r.x1, r.y1, d["fill"], opacity)
+        if d["type"] in ("s", "fs") and d.get("color"):
+            width = d.get("width") or 1
+            opacity = 1 if d.get("stroke_opacity") is None else d["stroke_opacity"]
+            for i in d["items"]:
+                if i[0] == "l":
+                    a, b = i[1], i[2]
+                    if abs(a.y - b.y) <= 2 < abs(a.x - b.x):
+                        mid = (a.y + b.y) / 2
+                        add(min(a.x, b.x), mid - width / 2, max(a.x, b.x), mid + width / 2, d["color"], opacity)
+                    elif abs(a.x - b.x) <= 2 < abs(a.y - b.y):
+                        posts.append((a.x, min(a.y, b.y), max(a.y, b.y)))
+                elif i[0] in ("re", "qu"):
+                    r = i[1] if i[0] == "re" else i[1].rect
+                    if r.height <= THIN_POST:
+                        add(r.x0, r.y0, r.x1, r.y1, d["color"], opacity)
+                    else:  # a frame: its sides show it is a cell, so its bottom edge is no underline
+                        posts += [(r.x0, r.y0, r.y1), (r.x1, r.y0, r.y1)]
+    return bars, posts
+
+
+def bar_kind(bar, line):
+    """The core test: how high a bar sits above the baseline, as a share of the font size."""
+    thickness, size = bar["y1"] - bar["y0"], line["size"]
+    marker = is_marker(bar["rgb"], bar["opacity"])
+    if thickness <= THIN_LINE * size:
+        rise = (line["baseline"] - (bar["y0"] + bar["y1"]) / 2) / size
+        if rise < -UNDER_DEPTH or rise > STRIKE_TOP:
+            return None
+        if rise <= UNDER_TOP:
+            return "underline"
+        return "highlight" if marker else "strikethrough"  # marker ink never cancels anything
+    if marker and thickness <= TALL_BAR * size and bar["y0"] <= line["baseline"] - 0.25 * size <= bar["y1"]:
+        return "highlight"
+    return None
+
+
+def read_bar(bar, lines):
+    hits = []
+    for line in lines:
+        kind = line["upright"] and bar_kind(bar, line)
+        chars = [box for box, _ in line["chars"] if bar["x0"] <= (box[0] + box[2]) / 2 <= bar["x1"]] if kind else None
+        if chars:
+            hits.append((sum(box[2] - box[0] for box in chars), kind, line, chars))
+    if not hits:
+        return None
+    _, kind, line, _ = max(hits, key=lambda h: h[0])
+    row = [h for h in hits if h[1] == kind and abs(h[2]["baseline"] - line["baseline"]) <= 1]
+    if sum(h[0] for h in row) < MIN_FIT * (bar["x1"] - bar["x0"]):
+        return None  # far longer than its words: a rule, not a mark
+    boxes = [box for h in row for box in h[3]]
+    return {"kind": kind, "origin": "drawn", "baseline": line["baseline"], "size": line["size"],
+            "x0": min(b[0] for b in boxes), "x1": max(b[2] for b in boxes),
+            "top": min(b[1] for b in boxes), "bottom": max(b[3] for b in boxes)}
+
+
+def join_on_rows(found):
+    """Tools often draw one line per word."""
+    joined = []
+    for m in sorted(found, key=lambda m: (m["kind"], round(m["baseline"]), m["x0"])):
+        last = joined[-1] if joined else None
+        if last and last["kind"] == m["kind"] and abs(last["baseline"] - m["baseline"]) <= 1 \
+                and m["x0"] - last["x1"] <= m["size"]:
+            last.update(x1=max(last["x1"], m["x1"]), top=min(last["top"], m["top"]),
+                        bottom=max(last["bottom"], m["bottom"]))
+        else:
+            joined.append(dict(m))
+    return joined
+
+
+def text_of(m, lines):
+    return "".join(c for line in lines if abs(line["baseline"] - m["baseline"]) <= 1 for box, c in line["chars"]
+                   if m["x0"] <= (box[0] + box[2]) / 2 <= m["x1"])
+
+
+def join_across_rows(found, lines):
+    """One sentence marked over two lines is one mark, so one question can cover it."""
+    rows = {}
+    for line in lines:
+        if line["upright"]:
+            boxes = [box for box, _ in line["chars"]]
+            row = rows.setdefault(round(line["baseline"]), [math.inf, -math.inf])
+            row[0], row[1] = min(row[0], *(b[0] for b in boxes)), max(row[1], *(b[2] for b in boxes))
+    order = sorted(rows)
+    chains = []
+    for m in sorted(found, key=lambda m: (m["baseline"], m["x0"])):
+        y = round(m["baseline"])
+        near = order.index(y) if y in order else -1
+        above = order[near - 1] if near > 0 else None
+        for chain in chains:
+            tail = chain[-1]
+            if above is not None and tail["kind"] == m["kind"] and round(tail["baseline"]) == above \
+                    and y - above <= ROW_GAP * m["size"] and rows[above][1] - tail["x1"] <= m["size"] \
+                    and m["x0"] - rows[y][0] <= m["size"]:
+                chain.append(m)
+                break
+        else:
+            chains.append([m])
+    return [{"kind": c[0]["kind"], "origin": "drawn", "text": tidy(" ".join(text_of(m, lines) for m in c)),
+             "bbox": [min(m["x0"] for m in c), min(m["top"] for m in c),
+                      max(m["x1"] for m in c), max(m["bottom"] for m in c)]} for c in chains]
+
+
 def drawn_marks(page, lines):
-    return []
+    width, height = page.rect.width, page.rect.height
+    if page.rotation % 180:
+        width, height = height, width
+    bars, posts = page_shapes(page)
+    links = [link["from"] for link in page.get_links()]
+    found = []
+    for bar in bars:
+        length, mid = bar["x1"] - bar["x0"], (bar["y0"] + bar["y1"]) / 2
+        if length >= PAGE_WIDE * width:
+            continue
+        if bar["y1"] - bar["y0"] <= THIN_RULE:
+            if length >= PAGE_RULE * width and not PAGE_MARGIN * height <= mid <= (1 - PAGE_MARGIN) * height:
+                continue  # a header or footer rule
+            if any(bar["x0"] - 2 <= x <= bar["x1"] + 2 and top - 1.5 <= mid <= bottom + 1.5 for x, top, bottom in posts):
+                continue  # meets a vertical rule: a table
+        m = read_bar(bar, lines)
+        if not m:
+            continue
+        center = (m["x0"] + m["x1"]) / 2
+        if m["kind"] == "underline" and any(r.x0 <= center <= r.x1 and r.y0 <= m["baseline"] <= r.y1 for r in links):
+            continue  # how a hyperlink looks, nobody's emphasis
+        found.append(m)
+    return join_across_rows(join_on_rows(found), lines)
 
 
 def page_marks(page, number):
