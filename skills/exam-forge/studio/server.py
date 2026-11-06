@@ -193,7 +193,7 @@ class Handler(BaseHTTPRequestHandler):
         elif url.path == "/api/intake":
             self.server.page_seen = time.time()
             self.send_json({"session": forge.session_waiting(), "request": forge.intake_request(),
-                            "ask": open_ask()})
+                            "ask": open_ask(), "defaults": forge.default_team(forge.load_settings())})
         elif url.path == "/book":
             n = q.get("n", ["0"])[0]
             self.send_book(self.find_run(wanted), int(n) if n.isdigit() else -1)
@@ -215,7 +215,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.post_upload(parse_qs(url.query))
         route = {"/api/settings": self.post_setting, "/api/jobs": self.post_job, "/api/cancel": self.post_cancel,
                  "/api/answer": self.post_answer, "/api/browse": self.post_browse,
-                 "/api/sources": self.post_sources, "/api/install": self.post_install}.get(url.path)
+                 "/api/sources": self.post_sources, "/api/install": self.post_install,
+                 "/api/estimate": self.post_estimate}.get(url.path)
         if not route:
             return self.send_json({"error": "not found"}, 404)
         try:
@@ -256,6 +257,9 @@ class Handler(BaseHTTPRequestHandler):
     def post_install(self, body):
         """One entry of forge's fixed table, chosen by a click in the page."""
         self.send_json({"ok": True, "detail": forge.install_requirement(body.get("id"))})
+
+    def post_estimate(self, body):
+        self.send_json(forge.plan_estimate(body, forge.load_settings()))
 
     def post_sources(self, body):
         self.send_json({"ok": True, "pdfs": forge.expand_sources(body["paths"])})

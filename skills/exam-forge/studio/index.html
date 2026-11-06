@@ -90,6 +90,22 @@
       <div class="field"><div><span class="label" data-i18n="job_mix"></span><p data-i18n="job_mix_help"></p></div><div class="control" id="job-mix"></div></div>
     </fieldset>
     <fieldset>
+      <legend data-i18n="job_team"></legend>
+      <div class="field"><div><span data-i18n="job_mode"></span><p data-i18n="job_mode_help"></p></div>
+        <div class="control"><div id="job-mode" class="segment" role="radiogroup">
+          <button type="button" role="radio" data-mode="budget" data-i18n="job_mode_budget"></button>
+          <button type="button" role="radio" data-mode="manual" data-i18n="job_mode_manual"></button>
+        </div></div></div>
+      <div class="field" id="job-budget-row"><div><label for="job-budget" data-i18n="job_budget"></label><p data-i18n="job_budget_help"></p></div>
+        <div class="control budget"><input type="number" id="job-budget" min="0" step="any"><select id="job-unit" data-i18n-label="job_unit"></select></div></div>
+      <div class="field wide"><div id="job-team" class="team-grid"></div></div>
+      <div class="field wide estimate">
+        <p id="job-estimate" role="status"></p>
+        <p id="job-warning" class="warn"></p>
+        <p data-i18n="job_estimate_note"></p>
+      </div>
+    </fieldset>
+    <fieldset>
       <legend data-i18n="job_guidance"></legend>
       <div class="field"><div><label for="job-notes" data-i18n="job_notes"></label><p data-i18n="job_notes_help"></p></div><div class="control"><textarea id="job-notes" maxlength="4000"></textarea></div></div>
       <div class="field"><div><label for="job-field" data-i18n="job_field"></label><p data-i18n="job_field_help"></p></div><div class="control"><input type="text" id="job-field" maxlength="100"></div></div>

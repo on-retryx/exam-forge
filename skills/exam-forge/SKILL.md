@@ -13,7 +13,7 @@ Constants:
 - **Python:** `PY` is the command found in section 0. Pass it to agents with `FORGE`.
 - **Settings:** `$PY "$FORGE" settings` prints them (defaults plus `~/.config/exam-forge/settings.json`). Read once at the start; below they appear as `s.x`.
 - **Agents:** `editor`, `screener`, `reviewer`, `chief-editor`. Installed as a plugin they are `exam-forge:editor` and so on. Always prefer the prefixed name; use the bare name only if the prefixed one does not exist.
-- **Models:** use `plan.team`. Pass `team.<role>` as `model` in each Agent call. An empty value means that role is off.
+- **Models:** use `plan.team`. Pass `team.<role>` as `model` in each Agent call. An empty value means that role is off. If `plan.effort` exists, also pass `effort.<role>` as `effort`. If an agent cannot start because this account has no Opus, use `sonnet` for that role from then on and tell the user (`ask` on a form job, with the single option `ok=OK`, in the background).
 - **Progress marker:** every agent prompt starts with this exact line, which feeds the Studio: `EXAM_FORGE: run=<run>|pdf=<stem>|chunk=<N>|round=<K>`
 
 ## Invariants
@@ -51,7 +51,7 @@ Leave out `--pdf` and `--notes` when you have none: the user adds files or folde
 $PY "$FORGE" intake wait
 ```
 When it exits, read its output:
-- **Exit 0:** the JSON is the job: `pdfs`, `format`, `mcq_options`, `answer_placement`, `merge` (true, false, or null for one PDF), `notes`, `field`, `difficulty_mix`, `contents`. These replace every question below; ask nothing more and go to section 2. An empty `field` means no field. Remember that this job came from the form.
+- **Exit 0:** the JSON is the job: `pdfs`, `format`, `mcq_options`, `answer_placement`, `merge` (true, false, or null for one PDF), `notes`, `field`, `difficulty_mix`, `contents`, `team`, `effort`, `budget`. These replace every question below; ask nothing more and go to section 2. An empty `field` means no field. Remember that this job came from the form.
 - **Exit 5:** the user cancelled in the Studio. Say so in one line and stop.
 - **Exit 4:** the form timed out. Tell the user to run the command again, and stop.
 
@@ -71,7 +71,7 @@ If background commands are not available, run `intake wait --timeout 540` in the
 ```bash
 $PY "$FORGE" plan "<pdf1>" "<pdf2>" ...
 ```
-On a form job add `--mix <easy>,<medium>,<hard>` from `difficulty_mix`. This creates the run folder (`plan.run`, under `<output>/.exam-forge/<timestamp>/`), with one subfolder per PDF named by its stem. Page counts that cannot be read: open the PDF with Read and pass `--pages "name.pdf=N"`.
+On a form job also pass the choices from the form: `--mix <easy>,<medium>,<hard>`, `--team editor=<m>,screener=<m>,reviewer=<m>,chief_editor=<m>`, `--effort editor=<e>,screener=<e>,reviewer=<e>,chief_editor=<e>`, and `--budget <unit>=<amount>` if `budget` is not null. This creates the run folder (`plan.run`, under `<output>/.exam-forge/<timestamp>/`), with one subfolder per PDF named by its stem. Page counts that cannot be read: open the PDF with Read and pass `--pages "name.pdf=N"`.
 
 **Studio:** if the job came from the form it is already open; skip this. Otherwise, if `s.studio_auto_open` is true, start it in the background and give the user the URL it prints. It is optional, so continue if it fails:
 ```bash
@@ -94,6 +94,8 @@ When an editor finishes, do not wait for the others; move that chunk forward:
 5. **Chief editor** (only if `team.chief_editor` is set, after a chunk has no failures left): `$PY "$FORGE" audit-sample <chunk>` prints the ids. Start the chief editor with those ids, the marker, `FORGE`, chunk file, PDF path, output `<run>/<stem>/audit-N-round1.json`. Then `$PY "$FORGE" approve <chunk> <audit.json> --audit`. Failures go to section 5.
 
 ## 5. Correction loop
+On a job with `plan.budget`, run `$PY "$FORGE" cost "<run>" --budget-check` before each new round. Exit 6 means spending has passed 120% of the target: ask with `--option "continue=Keep going" --option "stop=Stop and print what is verified"`. It fires once per job. Stopping still needs the shorter-book approval below.
+
 For failures from any layer:
 1. Start a new editor in correction mode: rejected ids, old questions, the feedback, the instruction to write new ones with the same difficulty and type, a short list of the other questions (to avoid repeats), output `<run>/<stem>/fix-N-roundK.json`.
 2. `$PY "$FORGE" replace <chunk> <fix.json>`
@@ -122,6 +124,6 @@ $PY "$FORGE" render "<run>/book-<name>.json" "<output>/<name>-questions.pdf" --a
 - Open the first 3 pages of the PDF and one answer page with Read to check for broken characters or overflow. You do not need to reread the questions.
 
 ## 7. Close
-Report for each book: output path, question count, difficulty split, how many questions were rewritten in how many rounds, any thin-page reduction and its reason, any unreadable pages. Add the subagent cost from `$PY "$FORGE" cost "<run>"`. Keep the run folder; the user can delete it.
+Run `$PY "$FORGE" cost "<run>" --record`; it also makes later estimates more accurate. Report for each book: output path, question count, difficulty split, how many questions were rewritten in how many rounds, any thin-page reduction and its reason, any unreadable pages. Add the subagent cost from that command. Keep the run folder; the user can delete it.
 
 If the job came from the form, start `intake wait` in the background again and end your turn, so the next job can start from the Studio. Handle its exit as in section 1, except that on exit 4 or 5 you say nothing more than one line.

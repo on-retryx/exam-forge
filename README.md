@@ -24,6 +24,8 @@ AI can write exam questions quickly. The hard part is trusting them. A model can
 
 You need Claude Code, Python 3.9+, and Chrome, Chromium or Edge to print the PDF. Without a browser, the book comes out as HTML that you can print from any browser.
 
+On each run Exam Forge checks these and the PDF page tool, and offers to install what is missing. `forge.py doctor` shows the same list. Nothing is installed without your approval, and pymupdf goes into its own folder, `~/.config/exam-forge/venv`.
+
 In Claude Code:
 
 ```
@@ -125,13 +127,15 @@ Long PDFs can use a real share of a Claude Pro session. `/exam-forge:exam-forge`
 
 ## Studio
 
-The Studio opens in your browser when a job starts. It is a pixel-art office drawn entirely in code, including its own font, with no image files, downloads or external services, and it runs only on your computer.
+The Studio opens in a window of its own when a job starts, with a start screen that checks your setup. Without a Chromium browser it opens as a tab (`studio_window` = `false` does the same). It is a pixel-art office drawn entirely in code, including its own font, with no image files, downloads or external services, and it runs only on your computer.
 
 - The team grows with the job: hopping pixel bots in different shapes for each editor and reviewer, a screener, and a crowned chief editor in a glass office, all at desks with their own PCs
 - Bots carry pages between desks, PASS and FAIL stamps appear, and speech bubbles show what each bot is doing (`studio_speech_bubbles` turns them off)
 - Click the chief editor's computer, or any bot, to open the team console: every agent, its current task, model and recent activity. Move through agents with the arrow keys, or show one in the office.
 - Live progress, reasons for rejection, estimated cost, past jobs and every setting
 - English and Turkish, day and night themes. With no job running, it plays a demo.
+
+In the job form you can name a cost target in USD or tokens and get the best team for it, or pick each role's model and effort and watch the estimate change. The estimate is a range: it starts from one measured job and adjusts to your own jobs over time. A target is not a hard limit, because the number of rewrite rounds can't be known in advance; if spending passes 120% of it, the Studio asks whether to go on. USD figures use API list prices, so on a subscription they are only a comparison.
 
 It never shows question text. Open it any time with `/exam-forge:studio`. To stop it opening by itself: `studio_auto_open` = `false`.
 

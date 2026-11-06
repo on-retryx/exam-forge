@@ -7,10 +7,20 @@
 - Sources in the form: browse this computer for files and folders, or drop them onto the form (a folder adds every PDF inside it; dropped files are copied to `~/Exam Forge/`)
 - `forge.py intake` and `forge.py ask`, which connect a waiting Claude Code session to the form
 - `studio_job_form` setting; set it to `false` to keep answering in the chat
+- Team and cost in the form: name a target in USD or tokens and get the best team for it, or choose each role's model and effort yourself, with a live estimate
+- Difficulty sliders in the form and in Settings; the three always add up to 100%
+- `book_contents` setting: ask, always or never add the contents page
+- `forge.py doctor` and a start screen that check Python, the PDF page tool and the browser, and install what is missing after a click. pymupdf goes into a private venv
+- `forge.py models`: finds out once whether this account can use Opus, with one short request. The chief editor starts on Opus if so, on Sonnet if not
+- `forge.py cost --record` makes later estimates fit this user, and `cost --budget-check` asks in the Studio when spending passes 120% of the target
 
 ### Changed
 - With the form on, the skill no longer asks setup questions in the chat
 - A Studio left running by another version is no longer reused
+- The Studio opens in a window of its own when a Chromium browser is installed (`studio_window`), and a new `/exam-forge` reuses a window that is already open
+- Files can be dropped anywhere in the Studio window, including over an open dialog. They used to vanish without a message outside the form
+- Brave opens the Studio window. Printing still needs Chrome, Chromium or Edge, because headless Brave did not write the PDF in testing
+- A browser that hangs while printing now leaves the book as HTML instead of stopping with an error
 
 ## [0.2.0] - 2026-11-06
 

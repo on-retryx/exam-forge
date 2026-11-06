@@ -40,12 +40,22 @@
 
   function setupTeam(e) {
     const chunks = e.pdfs.reduce((n, p) => n + p.chunks, 0);
-    job.team = e.team; job.plan = e.pdfs.reduce((n, p) => n + p.questions, 0);
+    job.team = e.team; job.budget = e.budget; job.plan = e.pdfs.reduce((n, p) => n + p.questions, 0);
     job.title = e.pdfs.map((p) => p.stem).join(" + ");
     e.pdfs.forEach((p) => { for (let c = 1; c <= p.chunks; c++) chunkOf({ pdf: p.stem, chunk: c }); });
     office.reseed();
     office.setup(e.team, chunks, chunks);
     return chunks;
+  }
+
+  function costText() {
+    const total = job.cost && job.cost.agents ? job.cost.total : null, b = job.budget;
+    if (b && b.unit === "tokens") {
+      const used = total ? total.input + total.output + total.cache_read + total.cache_write : 0;
+      return `${(used / 1e6).toFixed(1)} / ${(b.amount / 1e6).toFixed(1)} M`;
+    }
+    const spent = total ? "$" + total.usd.toFixed(2) : "–";
+    return b ? `${spent} / $${b.amount}` : spent;
   }
 
   const labelOf = (a) => {
@@ -188,7 +198,7 @@
     $("s-verified").textContent = `${verified} / ${total}`;
     $("s-rewrites").textContent = job.rewrites;
     $("s-chunks").textContent = `${cs.filter((c) => c.stage === "done").length} / ${cs.length}`;
-    $("s-cost").textContent = job.cost && job.cost.agents ? "$" + job.cost.total.usd.toFixed(2) : "–";
+    $("s-cost").textContent = costText();
     office.boardTitle = job.title;
     office.board = cs.map((c) => ({ stage: c.stage, share: c.stage === "done" ? 1 : c.questions ? Math.max(0.08, c.verified / c.questions) : 0.08 }));
     const team = job.team, nE = office.editors.length, nR = office.reviewers.length;
@@ -574,7 +584,8 @@
   /* ---------- job form ---------- */
   const SENT_MS = 3 * 60 * 1000;
   const FORMATS = ["mcq", "open", "mixed", "full-mix"];
-  const form = { pdfs: [], requestId: null, session: false, askId: null, sentAt: 0, ready: false, uploading: false };
+  const form = { pdfs: [], requestId: null, session: false, askId: null, sentAt: 0, ready: false, uploading: false,
+    mix: null, team: {}, effort: {}, mode: "manual", touched: false, opus: undefined, sources: "" };
   const postJson = (u, body) => fetch(u, {
     method: "POST", headers: { "Content-Type": "application/json", "X-Forge-Token": TOKEN }, body: JSON.stringify(body),
   }).then((r) => r.json());
@@ -598,7 +609,73 @@
     $("job-field").value = v.field || "";
     $("job-contents").checked = v.book_contents !== "never";
     form.mix = v.difficulty_mix;
-    $("job-mix").replaceChildren(mixSliders(form.mix, (mix) => { form.mix = mix; }));
+    renderJobOptions();
+  }
+
+  /* ---------- team and cost ---------- */
+  const ROLES = [["editor", "role_editor"], ["screener", "role_screener"], ["reviewer", "role_reviewer"], ["chief_editor", "role_chief"]];
+  const EFFORTS = ["low", "medium", "high", "xhigh", "max"];
+  const CAN_BE_OFF = ["screener", "chief_editor"];
+  const millions = (n) => `${(n / 1e6).toFixed(1)} M`;
+  const money = (n) => `$${n.toFixed(2)}`;
+  let estimateTimer = 0, estimateSeq = 0;
+
+  function renderTeam() {
+    const box = $("job-team");
+    box.replaceChildren();
+    ["job_role", "job_model", "job_effort"].forEach((k) => { const b = document.createElement("b"); b.textContent = T(k); box.append(b); });
+    ROLES.forEach(([role, label]) => {
+      const name = document.createElement("span"), model = document.createElement("select"), effort = document.createElement("select");
+      name.textContent = T(label);
+      const families = [["haiku", "Haiku"], ["sonnet", "Sonnet"], ["opus", form.opus === false ? `Opus (${T("job_no_access")})` : "Opus"]];
+      setOptions(model, CAN_BE_OFF.includes(role) ? [["", T("job_off")], ...families] : families);
+      setOptions(effort, EFFORTS.map((e) => [e, T("effort_" + e)]));
+      model.value = form.team[role] ?? ""; effort.value = form.effort[role] || "high";
+      effort.disabled = !model.value;
+      model.setAttribute("aria-label", `${T(label)}: ${T("job_model")}`); effort.setAttribute("aria-label", `${T(label)}: ${T("job_effort")}`);
+      const edited = () => { form.team[role] = model.value; form.effort[role] = effort.value; form.touched = true; effort.disabled = !model.value; setMode("manual"); };
+      model.onchange = edited; effort.onchange = edited;
+      box.append(name, model, effort);
+    });
+  }
+
+  function setMode(mode) {
+    form.mode = mode;
+    document.querySelectorAll("[data-mode]").forEach((b) => b.setAttribute("aria-checked", String(b.dataset.mode === mode)));
+    $("job-budget-row").hidden = mode !== "budget";
+    scheduleEstimate();
+  }
+
+  function applyDefaults(d) {
+    if (!d || (form.opus === d.opus && form.team.editor !== undefined)) return;
+    form.opus = d.opus;
+    if (!form.touched && form.mode === "manual") { form.team = d.team; form.effort = d.effort; }
+    renderTeam();
+    scheduleEstimate();
+  }
+
+  function budgetOf() {
+    const amount = parseFloat($("job-budget").value);
+    return form.mode === "budget" && amount > 0 ? { unit: $("job-unit").value, amount } : null;
+  }
+
+  function scheduleEstimate() { clearTimeout(estimateTimer); estimateTimer = setTimeout(runEstimate, 250); }
+
+  async function runEstimate() {
+    const out = $("job-estimate"), warn = $("job-warning"), seq = ++estimateSeq;
+    warn.textContent = "";
+    if (!form.pdfs.length || form.team.editor === undefined) { out.textContent = T("job_estimate_empty"); return; }
+    const d = await postJson("/api/estimate", { pdfs: form.pdfs, team: form.team, effort: form.effort, budget: budgetOf() }).catch(() => null);
+    if (seq !== estimateSeq || !d) return;
+    if (!d.ok) { out.textContent = d.error || T("err_upload"); return; }
+    if (d.team) { form.team = d.team; form.effort = d.effort; renderTeam(); }
+    const e = d.estimate;
+    out.textContent = fill("job_estimate", { low: money(e.usd_low), high: money(e.usd_high), tokens: millions(e.tokens), pages: d.pages, questions: d.questions });
+    const notes = [];
+    if (d.reachable === false) notes.push(fill("job_unreachable", { min: $("job-unit").value === "usd" ? money(d.minimum) : millions(d.minimum) }));
+    if (form.team.reviewer === "haiku" || form.team.editor === "haiku") notes.push(T("job_warn_haiku"));
+    if (form.opus !== true && Object.values(form.team).includes("opus")) notes.push(T("job_warn_opus"));
+    warn.textContent = notes.join(" ");
   }
 
   function renderJobOptions() {
@@ -606,6 +683,9 @@
     setOptions($("job-options"), [["4", "4"], ["5", "5"]]);
     const spec = st.settings && st.settings.schema.settings.find((s) => s.key === "answer_placement");
     if (spec) setOptions($("job-answers"), spec.values.map((v) => [v, spec.value_labels[st.lang][v]]));
+    setOptions($("job-unit"), [["usd", "USD"], ["tokens", T("job_tokens")]]);
+    if (form.mix) $("job-mix").replaceChildren(mixSliders(form.mix, (mix) => { form.mix = mix; }));
+    renderTeam();
   }
 
   function renderJob() {
@@ -620,6 +700,8 @@
       li.append(span, rm); list.append(li);
     });
     list.hidden = !form.pdfs.length;
+    const sources = form.pdfs.join("|");
+    if (sources !== form.sources) { form.sources = sources; scheduleEstimate(); }
     const fmt = $("job-format").value;
     $("job-options-row").hidden = fmt !== "mcq" && fmt !== "full-mix";
     $("job-contents-row").hidden = !st.settings || st.settings.values.book_contents !== "ask";
@@ -671,7 +753,8 @@
     list.innerHTML = "";
     rows.slice(0, boot.shown).forEach((item) => {
       const li = document.createElement("li"), mark = document.createElement("span"), text = document.createElement("span"), note = document.createElement("small");
-      mark.className = `mark ${item.ok ? "ok" : "no"}`; mark.textContent = item.ok ? "✓" : "✗";
+      const waiting = !item.ok && item.id === "session";  // normal when the Studio was opened on its own
+      mark.className = `mark ${item.ok ? "ok" : waiting ? "wait" : "no"}`; mark.textContent = item.ok ? "✓" : waiting ? "·" : "✗";
       text.textContent = T("dep_" + item.id);
       note.textContent = item.ok ? item.detail : (item.id === "session" ? T("dep_session_no") : T("dep_missing"));
       text.append(note); li.append(mark, text);
@@ -719,6 +802,7 @@
       const d = await getJson("/api/intake");
       form.session = d.session;
       renderBoot();
+      applyDefaults(d.defaults);
       if (d.request && d.request.id !== form.requestId) {
         if (form.requestId) showTab("job");  // a new /exam-forge call while the window was already open
         form.requestId = d.request.id;
@@ -731,6 +815,10 @@
   }
 
   $("job-format").onchange = renderJob;
+  document.querySelectorAll("[data-mode]").forEach((b) => { b.onclick = () => setMode(b.dataset.mode); });
+  $("job-budget").oninput = scheduleEstimate;
+  $("job-unit").onchange = scheduleEstimate;
+  setMode("manual");
   $("ask").addEventListener("cancel", (ev) => ev.preventDefault());
   /* The browser hides the real path of a dropped file, so drops are uploaded. */
   const isPdf = (name) => /\.pdf$/i.test(name) && !name.startsWith(".");
@@ -883,6 +971,7 @@
       answer_placement: $("job-answers").value, merge: $("job-merge").checked,
       notes: $("job-notes").value, field: $("job-field").value,
       difficulty_mix: form.mix, contents: $("job-contents").checked,
+      team: form.team, effort: form.effort, budget: budgetOf(),
     });
     if (!d.ok) { $("job-error").textContent = errorText(d.error); renderJob(); return; }
     form.pdfs = []; $("job-notes").value = ""; form.sentAt = Date.now();

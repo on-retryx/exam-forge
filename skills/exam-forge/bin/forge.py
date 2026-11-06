@@ -9,6 +9,7 @@ Commands:
   render-pages <pdf> <3-12> --out DIR   Rasterize pages to PNG (pymupdf or pdftoppm)
   plan <pdf>... [--run DIR]             Question counts, difficulty split, chunks
        [--mix 0.2,0.5,0.3]              difficulty shares for this job
+       [--team editor=sonnet,...] [--effort editor=high,...] [--budget usd=5]
        [--pages file.pdf=N ...]         give the page count when it cannot be read
   check <chunk.json> [--format F] [--expected easy=2,medium=5,hard=3]
        [--mcq-options 4|5] [--min N]    --min allows a justified thin-page reduction
@@ -23,7 +24,10 @@ Commands:
   render <book.json> <out.pdf> [--answers book_end|inline|section_end] [--html F] [--no-contents]
   event <run> <type> [key=value ...]    Append an event by hand (hook fallback)
   cost <run>                            Tokens and estimated cost from transcripts
+  cost <run> --record                   Also learn from this run for later estimates
+  cost <run> --budget-check             Exit 6 once, when spending passes 120% of the target
   doctor [--json] [--install ID]        Check what a job needs; install one item
+  models [--probe]                      Which model families this account can use
   studio [--port N] [--no-open]         Start the local office view
   intake open [--pdf P ...] [--notes T]  Open the job form in the Studio
   intake wait [--timeout S]             Wait for a job from the form (exit 4 timeout, 5 cancelled)
@@ -37,6 +41,7 @@ import datetime as dt
 import glob
 import html
 import importlib
+from itertools import product
 import json
 import math
 import os
@@ -425,7 +430,7 @@ def load_fitz():
 
 def check_python():
     version = ".".join(map(str, sys.version_info[:3]))
-    return (sys.version_info >= (3, 10), version)
+    return (sys.version_info >= (3, 9), version)
 
 
 def check_pdf_tool():
@@ -455,13 +460,13 @@ def install_pymupdf():
 
 
 REQUIREMENTS = [
-    {"id": "python", "required": True, "check": check_python, "hint": "Python 3.10 or newer: https://www.python.org/downloads/"},
+    {"id": "python", "required": True, "check": check_python, "hint": "Python 3.9 or newer: https://www.python.org/downloads/"},
     {"id": "pdf_tool", "required": True, "check": check_pdf_tool, "install": install_pymupdf,
      "hint": "Run: forge.py doctor --install pdf_tool"},
     {"id": "browser", "required": True, "check": check_browser,
      "install": {"darwin": [["brew", "install", "--cask", "google-chrome"]],
                  "win32": [["winget", "install", "-e", "--id", "Google.Chrome"]]},
-     "hint": "Install Chrome, Edge, Brave or Chromium, or set EXAM_FORGE_BROWSER."},
+     "hint": "Install Chrome, Edge or Chromium, or set EXAM_FORGE_BROWSER."},
     {"id": "claude", "required": False, "check": check_claude, "hint": "Claude Code CLI on PATH; used to see which models you can use."},
 ]
 
@@ -519,11 +524,14 @@ def cmd_doctor(a):
 
 def open_window(url):
     """Open the Studio in a window of its own. A plain browser tab when that is not possible."""
-    browser = find_browser() if (S or load_settings())["studio_window"] else None
+    browser = find_browser(printing=False) if (S or load_settings())["studio_window"] else None
     if browser:
         try:
-            subprocess.Popen([browser, f"--app={url}", f"--user-data-dir={config_dir() / 'profile'}", "--no-first-run",
-                              "--no-default-browser-check", "--window-size=1280,860"],
+            flags = [f"--app={url}", f"--user-data-dir={config_dir() / 'profile'}", "--no-first-run",
+                     "--no-default-browser-check", "--window-size=1280,860"]
+            # On a Mac only LaunchServices brings a new window to the front.
+            bundle = browser.split(".app/Contents/MacOS/")[0] + ".app" if sys.platform == "darwin" and ".app/Contents/MacOS/" in browser else ""
+            subprocess.Popen(["open", "-n", "-a", bundle, "--args", *flags] if bundle else [browser, *flags],
                              stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                              start_new_session=True)
             return
@@ -533,9 +541,13 @@ def open_window(url):
 
 
 # ---------- pages ----------
-def find_browser():
+def find_browser(printing=True):
+    """The browser the user named, else a known one. Headless Brave never wrote the PDF
+    in testing, so it is only used for the Studio window unless named on purpose."""
     settings = S or load_settings()
-    for c in [os.environ.get("EXAM_FORGE_BROWSER"), settings.get("browser")] + BROWSER_CANDIDATES:
+    named = [os.environ.get("EXAM_FORGE_BROWSER"), settings.get("browser")]
+    known = [c for c in BROWSER_CANDIDATES if not (printing and "brave" in c.lower())]
+    for c in named + known:
         if not c:
             continue
         p = Path(c).expanduser()
@@ -671,6 +683,13 @@ def use_mix(mix, key="--mix"):
     S["difficulty_mix"] = mix
 
 
+def parse_pairs(raw, flag):
+    try:
+        return dict(x.split("=", 1) for x in raw.split(","))
+    except ValueError:
+        fail(f"{flag} must look like editor=sonnet,reviewer=opus")
+
+
 def cmd_plan(a):
     if a.mix:
         try:
@@ -700,6 +719,17 @@ def cmd_plan(a):
     for stem in stems:
         (run / stem).mkdir(parents=True, exist_ok=True)
     team = resolve_team(S)
+    extra = {}
+    try:
+        if a.team:
+            team = clean_team(parse_pairs(a.team, "--team"))
+        if a.effort:
+            extra["effort"] = clean_effort(parse_pairs(a.effort, "--effort"))
+        if a.budget:
+            unit, _, amount = a.budget.partition("=")
+            extra["budget"] = clean_budget({"unit": unit, "amount": float(amount)})
+    except (SettingsError, ValueError) as e:
+        fail(str(e))
     result = {
         "created": dt.datetime.now().isoformat(timespec="minutes"),
         "run": str(run),
@@ -709,12 +739,13 @@ def cmd_plan(a):
         "read_pages_supported": bool(shutil.which("pdftoppm")),
         "team": team,
         "difficulty_mix": S["difficulty_mix"],
+        **extra,
         "pdfs": plans,
     }
     text = json.dumps(result, ensure_ascii=False, indent=2)
     (run / "plan.json").write_text(text, encoding="utf-8")
     register_run(run)
-    emit(run, "plan", team=team, preset=S["quality_preset"],
+    emit(run, "plan", team=team, preset=S["quality_preset"], budget=extra.get("budget"),
          pdfs=[{"stem": p["stem"], "pages": p["pages"], "chunks": len(p["chunks"]),
                 "questions": max(p["question_options"])} for p in plans])
     print(text)
@@ -1191,10 +1222,18 @@ def cmd_render(a):
                   "Open it in a browser and print to PDF, or set EXAM_FORGE_BROWSER to a browser path.",
                   file=sys.stderr)
             sys.exit(3)
-        r = subprocess.run([browser, "--headless=new", "--disable-gpu", "--no-pdf-header-footer",
-                            f"--user-data-dir={td}/profile", "--no-first-run",
-                            f"--print-to-pdf={out}", h.as_uri()],
-                           capture_output=True, text=True, timeout=180)
+        try:
+            r = subprocess.run([browser, "--headless=new", "--disable-gpu", "--no-pdf-header-footer",
+                                f"--user-data-dir={td}/profile", "--no-first-run",
+                                f"--print-to-pdf={out}", h.as_uri()],
+                               capture_output=True, text=True, timeout=180)
+        except subprocess.TimeoutExpired:
+            fallback = out.with_suffix(".html")
+            shutil.copy(h, fallback)
+            emit(run, "render", questions=total, out=str(fallback), html_only=True)
+            print(f"ERROR: {Path(browser).name} did not finish printing. Book written as HTML: {fallback}",
+                  file=sys.stderr)
+            sys.exit(3)
     if not out.exists():
         fail(f"PDF was not produced: {r.stderr[-800:]}")
     emit(run, "render", questions=total, out=str(out))
@@ -1269,7 +1308,270 @@ def run_cost(run, pricing):
 
 
 def cmd_cost(a):
-    print(json.dumps(run_cost(Path(a.run).expanduser(), S["pricing"]), indent=2))
+    run = Path(a.run).expanduser()
+    cost = run_cost(run, S["pricing"])
+    if a.budget_check:
+        sys.exit(6 if budget_passed(run, cost) else 0)
+    if a.record:
+        record_calibration(run, cost)
+    print(json.dumps(cost, indent=2))
+
+
+# ---------- estimate ----------
+# Tokens per agent role, measured on a real 30-page, 40-question job at effort "high"
+# and including its rewrite rounds. Input scales with pages + questions, output with
+# questions. Every run recorded with `cost --record` corrects them for this user.
+COST_MODEL = {"editor": {"input": 17000, "output": 2200}, "screener": {"input": 8000, "output": 1400},
+              "reviewer": {"input": 17000, "output": 1850}}
+CACHE_READ_SHARE = 0.72  # of input tokens in that job; the rest were cache writes
+EFFORTS = ["low", "medium", "high", "xhigh", "max"]
+SCREENER_EFFORTS = ["low", "medium"]  # a proofreading pass gains nothing from more
+EFFORT_FACTOR = {"low": 0.6, "medium": 0.8, "high": 1.0, "xhigh": 1.3, "max": 1.7}  # assumed, not measured
+ESTIMATE_MARGIN = 0.35
+ROLES = ["editor", "screener", "reviewer", "chief_editor"]
+ROLE_RANK = {"editor": 3, "screener": 0.5, "reviewer": 4, "chief_editor": 2}
+MODEL_RANK = {"": 0, "haiku": 1, "sonnet": 3, "opus": 5}
+EFFORT_RANK = dict(zip(EFFORTS, [0, 1, 1.7, 2.1, 2.3]))  # each step adds less
+OPUS_ROLES = ("editor", "reviewer", "chief_editor")
+BUDGET_ALARM = 1.2
+
+
+def calibration_path():
+    return config_dir() / "calibration.json"
+
+
+def calibration():
+    try:
+        return json.loads(calibration_path().read_text(encoding="utf-8")).get("factor", {})
+    except (OSError, ValueError, AttributeError):
+        return {}
+
+
+def role_tokens(role, pages, questions, sample_rate, factor=None):
+    """Input and output tokens one role is expected to use on a job, at effort high."""
+    base = COST_MODEL["reviewer" if role == "chief_editor" else role]
+    share = sample_rate if role == "chief_editor" else 1
+    scale = share * (factor if factor is not None else 1)
+    return base["input"] * (pages + questions) * scale, base["output"] * questions * scale
+
+
+def role_cost(role, model, effort, tokens, pricing):
+    """(tokens, usd) for one role, or zeros when the role is off."""
+    if not model:
+        return 0, 0.0
+    price = pricing.get(model, {})
+    tokens_in, tokens_out = tokens[role]
+    in_rate = CACHE_READ_SHARE * price.get("cache_read", 0) + (1 - CACHE_READ_SHARE) * price.get("cache_write", 0)
+    spread = EFFORT_FACTOR[effort]
+    return ((tokens_in + tokens_out) * spread,
+            (tokens_in * in_rate + tokens_out * price.get("output", 0)) * spread / 1e6)
+
+
+def job_size(pdfs):
+    """Pages and questions of a job, from the same rules `plan` uses."""
+    pages = questions = 0
+    for p in pdfs:
+        pdf = Path(p).expanduser()
+        n = page_count(pdf)
+        if not n:
+            raise SettingsError(f"could not read the page count of {pdf.name}")
+        pages += n
+        questions += max(plan_pdf(pdf, n)["question_options"])
+    return pages, questions
+
+
+def estimate(tokens, team, effort, pricing):
+    roles = {r: role_cost(r, team.get(r, ""), effort.get(r, "high"), tokens, pricing) for r in ROLES}
+    used = sum(t for t, _ in roles.values())
+    usd = sum(u for _, u in roles.values())
+    return {"tokens": round(used), "usd": round(usd, 2), "usd_low": round(usd * (1 - ESTIMATE_MARGIN), 2),
+            "usd_high": round(usd * (1 + ESTIMATE_MARGIN), 2),
+            "by_role": {r: {"tokens": round(t), "usd": round(u, 2)} for r, (t, u) in roles.items()}}
+
+
+def quality(team, effort):
+    return sum(ROLE_RANK[r] * (MODEL_RANK[team[r]] + (EFFORT_RANK[effort[r]] if team[r] else 0)) for r in ROLES)
+
+
+def solve_budget(tokens, unit, amount, pricing, opus):
+    """The best team within the target. Reviewers stay on, at Sonnet or better."""
+    strong = ["sonnet", "opus"] if opus else ["sonnet"]
+    pick = {"editor": strong, "screener": ["", "haiku"], "reviewer": strong, "chief_editor": ["", *strong]}
+    levels = {r: SCREENER_EFFORTS if r == "screener" else EFFORTS for r in ROLES}
+    costs = {r: {(m, e): role_cost(r, m, e, tokens, pricing) for m in pick[r] for e in levels[r]} for r in ROLES}
+    metric = 0 if unit == "tokens" else 1
+    best = cheapest = None
+    for models in product(*(pick[r] for r in ROLES)):
+        team = dict(zip(ROLES, models))
+        for chosen in product(*(levels[r] for r in ROLES)):
+            effort = dict(zip(ROLES, chosen))
+            spent = sum(costs[r][(team[r], effort[r])][metric] for r in ROLES)
+            rank = quality(team, effort)
+            if cheapest is None or spent < cheapest[0]:
+                cheapest = (spent, team, effort)
+            if spent <= amount and (best is None or (rank, spent) > best[0]):
+                best = ((rank, spent), team, effort)
+    if best:
+        return {"team": best[1], "effort": best[2], "reachable": True, "minimum": cheapest[0]}
+    return {"team": cheapest[1], "effort": cheapest[2], "reachable": False, "minimum": cheapest[0]}
+
+
+def plan_estimate(body, settings):
+    """What the job form shows. With a budget, also the team that fits it."""
+    global S
+    S = settings
+    pdfs = body.get("pdfs")
+    if not isinstance(pdfs, list) or not pdfs:
+        raise SettingsError("choose at least one PDF")
+    pages, questions = job_size(pdfs)
+    factors = calibration()
+    tokens = {r: role_tokens(r, pages, questions, settings["chief_sample_rate"], factors.get(r)) for r in ROLES}
+    pricing = settings["pricing"]
+    team, effort = clean_team(body.get("team")), clean_effort(body.get("effort"))
+    out = {"ok": True, "pages": pages, "questions": questions}
+    budget = clean_budget(body.get("budget"))
+    if budget:
+        fit = solve_budget(tokens, budget["unit"], budget["amount"], pricing, model_access().get("opus") is True)
+        team, effort = fit["team"], fit["effort"]
+        out.update(team=team, effort=effort, reachable=fit["reachable"], minimum=fit["minimum"])
+    out["estimate"] = estimate(tokens, team, effort, pricing)
+    return out
+
+
+def clean_team(team):
+    if not isinstance(team, dict) or set(team) != set(ROLES):
+        raise SettingsError("team must name every role")
+    if any(team[r] not in MODEL_RANK for r in ROLES):
+        raise SettingsError("unknown model in team")
+    if not team["editor"] or not team["reviewer"]:
+        raise SettingsError("the editor and reviewer cannot be off")
+    return team
+
+
+def clean_effort(effort):
+    if not isinstance(effort, dict) or set(effort) != set(ROLES) or any(effort[r] not in EFFORTS for r in ROLES):
+        raise SettingsError(f"effort must give every role one of {EFFORTS}")
+    return effort
+
+
+def clean_budget(budget):
+    if budget is None:
+        return None
+    amount = budget.get("amount") if isinstance(budget, dict) else None
+    if not isinstance(budget, dict) or budget.get("unit") not in ("usd", "tokens") \
+            or isinstance(amount, bool) or not isinstance(amount, (int, float)) or amount <= 0:
+        raise SettingsError("budget needs a unit (usd or tokens) and a positive amount")
+    return {"unit": budget["unit"], "amount": amount}
+
+
+def default_team(settings):
+    """Where the job form starts. The chief editor gets the best model this account has."""
+    access = model_access().get("opus")
+    team = dict(PRESETS[settings["quality_preset"]])
+    team["chief_editor"] = "opus"
+    for role, model in settings["models"].items():
+        if model:
+            team[role] = model
+    if not settings["screener_enabled"]:
+        team["screener"] = ""
+    if access is not True:
+        team = {r: "sonnet" if m == "opus" else m for r, m in team.items()}
+    return {"team": team, "effort": {r: "low" if r == "screener" else "high" for r in ROLES}, "opus": access}
+
+
+def models_path():
+    return config_dir() / "models.json"
+
+
+def model_access():
+    try:
+        data = json.loads(models_path().read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def probe_opus():
+    """Ask Claude Code for one word from Opus. True, False, or None when unclear."""
+    claude = shutil.which("claude")
+    if not claude:
+        return None
+    try:
+        r = subprocess.run([claude, "-p", "Reply with: ok", "--model", "opus", "--output-format", "json",
+                            "--no-session-persistence", "--disable-slash-commands", "--strict-mcp-config", "--tools", ""],
+                           capture_output=True, text=True, timeout=90, stdin=subprocess.DEVNULL, cwd=tempfile.gettempdir())
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    try:
+        answer = json.loads(r.stdout)
+    except ValueError:
+        answer = {}
+    if r.returncode == 0 and answer.get("is_error") is False:
+        return True
+    text = f"{answer.get('result', '')} {r.stderr}".lower()
+    denied = ("not available", "not_found", "not found", "access", "upgrade", "does not support", "isn't available")
+    return False if "model" in text and any(w in text for w in denied) else None
+
+
+def cmd_models(a):
+    if a.probe:
+        result = probe_opus()
+        models_path().parent.mkdir(parents=True, exist_ok=True)
+        write_atomic(models_path(), {"opus": result, "t": now_iso()})
+    print(json.dumps(model_access()))
+
+
+def probe_in_background():
+    """The answer rarely changes: look again after 30 days, or after 1 when it was unclear."""
+    known = model_access()
+    try:
+        age = (dt.datetime.now() - dt.datetime.fromisoformat(known["t"])).days
+    except (KeyError, TypeError, ValueError):
+        age = 999
+    if age < (30 if known.get("opus") is not None else 1):
+        return
+    subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "models", "--probe"], stdin=subprocess.DEVNULL,
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+
+
+def read_plan(run):
+    try:
+        return json.loads((Path(run) / "plan.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def budget_passed(run, cost):
+    """True once, when a job with a target has used 120% of it."""
+    budget, mark = read_plan(run).get("budget"), Path(run) / "budget-alarm"
+    if not budget or not cost or mark.exists():
+        return False
+    total = cost["total"]
+    spent = total["usd"] if budget["unit"] == "usd" else sum(total[k] for k in ("input", "output", "cache_read", "cache_write"))
+    if spent < budget["amount"] * BUDGET_ALARM:
+        return False
+    mark.touch()
+    return True
+
+
+def record_calibration(run, cost):
+    """Move each role's correction a third of the way to what this run really used."""
+    mark, plan = Path(run) / "calibrated", read_plan(run)
+    if mark.exists() or not cost or not plan.get("pdfs"):
+        return
+    pages = sum(p["pages"] for p in plan["pdfs"])
+    questions = sum(max(p["question_options"]) for p in plan["pdfs"])
+    factors, effort = calibration(), plan.get("effort", {})
+    for role in ROLES:
+        seen = cost["by_role"].get(role.replace("_", "-"))
+        tokens = role_tokens(role, pages, questions, S["chief_sample_rate"])
+        expected = sum(tokens) * EFFORT_FACTOR[effort.get(role, "high")]
+        if seen and expected:
+            ratio = min(3.0, max(0.3, (seen["input"] + seen["output"]) / expected))
+            factors[role] = round(factors.get(role, 1.0) * 2 / 3 + ratio / 3, 3)
+    calibration_path().parent.mkdir(parents=True, exist_ok=True)
+    write_atomic(calibration_path(), {"factor": factors, "t": now_iso()})
+    mark.touch()
 
 
 def cmd_studio(a):
@@ -1446,9 +1748,13 @@ def validate_job(body, settings):
     if error:
         raise SettingsError(error)
     contents = {"always": True, "never": False}.get(settings["book_contents"], body.get("contents", True) is not False)
+    base = default_team(settings)
+    team = clean_team(body.get("team", base["team"]))
+    effort = clean_effort(body.get("effort", base["effort"]))
     return {"pdfs": pdfs, "format": body["format"], "mcq_options": body["mcq_options"],
             "answer_placement": body["answer_placement"], "merge": merge,
-            "notes": notes.strip(), "field": field.strip(), "difficulty_mix": mix, "contents": contents}
+            "notes": notes.strip(), "field": field.strip(), "difficulty_mix": mix, "contents": contents,
+            "team": team, "effort": effort, "budget": clean_budget(body.get("budget"))}
 
 
 def submit_job(job):
@@ -1499,6 +1805,7 @@ def intake_open(a):
         fail(str(e))
     write_atomic(box / "request.json", {"id": os.urandom(6).hex(), "t": now_iso(), "pdfs": pdfs,
                                         "notes": a.notes or ""})
+    probe_in_background()
     base = ensure_studio()
     url = base + "/?tab=job"
     if S["studio_auto_open"] and not a.no_open and not page_open(base):
@@ -1606,7 +1913,7 @@ def main():
     p.add_argument("--out", required=True); p.add_argument("--dpi", type=int, default=110)
     p.set_defaults(f=cmd_render_pages)
     p = sub.add_parser("plan"); p.add_argument("pdfs", nargs="+"); p.add_argument("--run")
-    p.add_argument("--mix")
+    p.add_argument("--mix"); p.add_argument("--team"); p.add_argument("--effort"); p.add_argument("--budget")
     p.add_argument("--pages", action="append"); p.set_defaults(f=cmd_plan)
     p = sub.add_parser("check"); p.add_argument("json"); p.add_argument("--format", choices=list(FORMATS))
     p.add_argument("--expected", help="easy=2,medium=5,hard=3; separate alternatives with '|'")
@@ -1627,11 +1934,14 @@ def main():
     p.add_argument("--language", default="en", help="label language of the book (en or tr)")
     p.add_argument("--titles", choices=["logical", "filename"]); p.set_defaults(f=cmd_merge)
     p = sub.add_parser("render"); p.add_argument("json"); p.add_argument("out")
+    p.add_argument("--no-contents", action="store_true")
     p.add_argument("--answers", choices=["book_end", "inline", "section_end"])
     p.add_argument("--html", help="also copy the intermediate HTML here"); p.set_defaults(f=cmd_render)
     p = sub.add_parser("event"); p.add_argument("run"); p.add_argument("type"); p.add_argument("data", nargs="*")
     p.set_defaults(f=cmd_event)
-    p = sub.add_parser("cost"); p.add_argument("run"); p.set_defaults(f=cmd_cost)
+    p = sub.add_parser("cost"); p.add_argument("run"); p.add_argument("--record", action="store_true")
+    p.add_argument("--budget-check", action="store_true"); p.set_defaults(f=cmd_cost)
+    p = sub.add_parser("models"); p.add_argument("--probe", action="store_true"); p.set_defaults(f=cmd_models)
     p = sub.add_parser("studio"); p.add_argument("--port", type=int); p.add_argument("--no-open", action="store_true")
     p.set_defaults(f=cmd_studio)
     p = sub.add_parser("intake"); p.add_argument("action", choices=["open", "wait"])
