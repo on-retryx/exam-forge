@@ -14,7 +14,6 @@ import threading
 import time
 import urllib.error
 import urllib.request
-import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -37,6 +36,7 @@ HIDDEN_FIELDS = {"transcript", "tool_use_id"}
 # Changes with the code, so a Studio left running by an older version is never reused.
 BUILD = hashlib.sha1((HERE / "server.py").read_bytes() + Path(forge.__file__).read_bytes()).hexdigest()[:10]
 IDLE_SECONDS = 30 * 60
+PAGE_SEEN_SECONDS = 6  # the page polls /api/intake every 2 seconds
 PORT_RANGE = 30
 MAX_UPLOAD_BYTES = 200 * 1024 * 1024
 UPLOAD_CHUNK = 1024 * 1024
@@ -164,7 +164,8 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(data)
         elif url.path == "/api/ping":
-            self.send_json({"app": "exam-forge", "build": BUILD})
+            self.send_json({"app": "exam-forge", "build": BUILD,
+                            "watching": time.time() - self.server.page_seen < PAGE_SEEN_SECONDS})
         elif url.path == "/api/runs":
             self.send_json({"runs": [run_summary(r) for r in known_runs()]})
         elif url.path == "/api/events":
@@ -187,7 +188,10 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(self.settings_payload())
             except forge.SettingsError as e:
                 self.send_json({"error": str(e)}, 500)
+        elif url.path == "/api/doctor":
+            self.send_json(forge.doctor())
         elif url.path == "/api/intake":
+            self.server.page_seen = time.time()
             self.send_json({"session": forge.session_waiting(), "request": forge.intake_request(),
                             "ask": open_ask()})
         elif url.path == "/book":
@@ -211,7 +215,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.post_upload(parse_qs(url.query))
         route = {"/api/settings": self.post_setting, "/api/jobs": self.post_job, "/api/cancel": self.post_cancel,
                  "/api/answer": self.post_answer, "/api/browse": self.post_browse,
-                 "/api/sources": self.post_sources}.get(url.path)
+                 "/api/sources": self.post_sources, "/api/install": self.post_install}.get(url.path)
         if not route:
             return self.send_json({"error": "not found"}, 404)
         try:
@@ -248,6 +252,10 @@ class Handler(BaseHTTPRequestHandler):
 
     def post_browse(self, body):
         self.send_json({"ok": True, **forge.list_folder(body.get("path")), "places": forge.places()})
+
+    def post_install(self, body):
+        """One entry of forge's fixed table, chosen by a click in the page."""
+        self.send_json({"ok": True, "detail": forge.install_requirement(body.get("id"))})
 
     def post_sources(self, body):
         self.send_json({"ok": True, "pdfs": forge.expand_sources(body["paths"])})
@@ -293,6 +301,7 @@ class Server(ThreadingHTTPServer):
         super().__init__(addr, Handler)
         self.token = secrets.token_urlsafe(24)
         self.last_seen = time.time()
+        self.page_seen = 0
 
     def touch(self):
         self.last_seen = time.time()
@@ -328,7 +337,7 @@ def main(port=8765, open_browser=True):
         url = f"http://127.0.0.1:{running}"
         print(f"Exam Forge Studio is already running: {url}", flush=True)
         if open_browser:
-            webbrowser.open(url)
+            forge.open_window(url)
         return
     server = Server(("127.0.0.1", free_port(port)))
     url = f"http://127.0.0.1:{server.server_address[1]}"
@@ -343,5 +352,5 @@ def main(port=8765, open_browser=True):
 
     threading.Thread(target=watch_idle, daemon=True).start()
     if open_browser:
-        threading.Timer(0.3, webbrowser.open, [url]).start()
+        threading.Timer(0.3, forge.open_window, [url]).start()
     server.serve_forever()

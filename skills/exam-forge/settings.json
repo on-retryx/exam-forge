@@ -22,6 +22,7 @@
   "topic_change_round": 4,
   "max_rounds": 6,
   "studio_auto_open": true,
+  "studio_window": true,
   "studio_job_form": true,
   "studio_speech_bubbles": true,
   "studio_port": 8765,

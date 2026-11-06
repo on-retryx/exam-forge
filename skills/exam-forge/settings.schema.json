@@ -500,6 +500,19 @@
    }
   },
   {
+   "key": "studio_window",
+   "group": "advanced",
+   "type": "bool",
+   "label": {
+    "en": "Open in its own window",
+    "tr": "Kendi penceresinde aç"
+   },
+   "help": {
+    "en": "Open the Studio as a separate app window. Off, or with no Chromium browser, it opens as a browser tab.",
+    "tr": "Studio'yu ayrı bir uygulama penceresi olarak açar. Kapalıysa ya da Chromium tabanlı tarayıcı yoksa tarayıcı sekmesinde açılır."
+   }
+  },
+  {
    "key": "studio_job_form",
    "group": "advanced",
    "type": "bool",

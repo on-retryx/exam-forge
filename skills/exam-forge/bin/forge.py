@@ -23,6 +23,7 @@ Commands:
   render <book.json> <out.pdf> [--answers book_end|inline|section_end] [--html F] [--no-contents]
   event <run> <type> [key=value ...]    Append an event by hand (hook fallback)
   cost <run>                            Tokens and estimated cost from transcripts
+  doctor [--json] [--install ID]        Check what a job needs; install one item
   studio [--port N] [--no-open]         Start the local office view
   intake open [--pdf P ...] [--notes T]  Open the job form in the Studio
   intake wait [--timeout S]             Wait for a job from the form (exit 4 timeout, 5 cancelled)
@@ -33,7 +34,9 @@ then the file named by EXAM_FORGE_SETTINGS. Only the keys present are overridden
 """
 import argparse
 import datetime as dt
+import glob
 import html
+import importlib
 import json
 import math
 import os
@@ -44,6 +47,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.request
 import webbrowser
 from pathlib import Path
 
@@ -290,11 +294,13 @@ BROWSER_CANDIDATES = [
     "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
     "/Applications/Chromium.app/Contents/MacOS/Chromium",
     "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
-    "google-chrome", "google-chrome-stable", "chromium", "chromium-browser", "microsoft-edge",
+    "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
+    "google-chrome", "google-chrome-stable", "chromium", "chromium-browser", "microsoft-edge", "brave-browser",
     r"C:\Program Files\Google\Chrome\Application\chrome.exe",
     r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
     r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
     r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+    r"C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe",
 ]
 LABELS = {
     "en": {
@@ -397,9 +403,139 @@ def cmd_event(a):
     emit(Path(a.run).expanduser(), a.type, **data)
 
 
+# ---------- requirements ----------
+# One entry per thing a job needs. To require something new, add an entry here:
+# the skill, `doctor` and the Studio's start screen all read this table.
+def venv_dir():
+    return config_dir() / "venv"
+
+
+def load_fitz():
+    """pymupdf from this Python or from our own venv. None when neither has it."""
+    for site in glob.glob(str(venv_dir() / "lib" / "python*" / "site-packages")) + [str(venv_dir() / "Lib" / "site-packages")]:
+        if site not in sys.path and Path(site).is_dir():
+            sys.path.append(site)
+    for name in ("pymupdf", "fitz"):  # newer releases deprecate the old name
+        try:
+            return importlib.import_module(name)
+        except Exception:  # a venv built by another Python raises more than ImportError
+            continue
+    return None
+
+
+def check_python():
+    version = ".".join(map(str, sys.version_info[:3]))
+    return (sys.version_info >= (3, 10), version)
+
+
+def check_pdf_tool():
+    if load_fitz():
+        return True, "pymupdf"
+    return bool(shutil.which("pdftoppm")), "pdftoppm" if shutil.which("pdftoppm") else ""
+
+
+def check_browser():
+    b = find_browser()
+    return bool(b), Path(b).stem if b else ""
+
+
+def check_claude():
+    c = shutil.which("claude")
+    return bool(c), c or ""
+
+
+def venv_python():
+    return venv_dir() / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+
+
+def install_pymupdf():
+    """A private venv: it works on an externally managed Python and leaves the system one alone."""
+    return [[sys.executable, "-m", "venv", "--clear", str(venv_dir())],
+            [str(venv_python()), "-m", "pip", "install", "--quiet", "--disable-pip-version-check", "pymupdf"]]
+
+
+REQUIREMENTS = [
+    {"id": "python", "required": True, "check": check_python, "hint": "Python 3.10 or newer: https://www.python.org/downloads/"},
+    {"id": "pdf_tool", "required": True, "check": check_pdf_tool, "install": install_pymupdf,
+     "hint": "Run: forge.py doctor --install pdf_tool"},
+    {"id": "browser", "required": True, "check": check_browser,
+     "install": {"darwin": [["brew", "install", "--cask", "google-chrome"]],
+                 "win32": [["winget", "install", "-e", "--id", "Google.Chrome"]]},
+     "hint": "Install Chrome, Edge, Brave or Chromium, or set EXAM_FORGE_BROWSER."},
+    {"id": "claude", "required": False, "check": check_claude, "hint": "Claude Code CLI on PATH; used to see which models you can use."},
+]
+
+
+def install_steps(item):
+    plan = item.get("install")
+    if callable(plan):
+        return plan()
+    return (plan or {}).get(sys.platform)
+
+
+def doctor():
+    items = []
+    for item in REQUIREMENTS:
+        ok, detail = item["check"]()
+        items.append({"id": item["id"], "ok": ok, "required": item["required"], "detail": detail,
+                      "can_install": bool(install_steps(item)), "hint": item["hint"]})
+    return {"ok": all(i["ok"] for i in items if i["required"]), "items": items}
+
+
+def install_requirement(name):
+    """Run the fixed steps of one table entry. Callers must have the user's approval."""
+    item = next((x for x in REQUIREMENTS if x["id"] == name), None)
+    steps = install_steps(item) if item else None
+    if not steps:
+        raise SettingsError(f"cannot install '{name}' from here")
+    for step in steps:
+        try:
+            r = subprocess.run(step, capture_output=True, text=True, timeout=600, stdin=subprocess.DEVNULL)
+        except (OSError, subprocess.TimeoutExpired) as e:
+            raise SettingsError(f"{step[0]} failed: {e}")
+        if r.returncode != 0:
+            raise SettingsError(f"{Path(step[0]).name} failed: {(r.stderr or r.stdout)[-400:].strip()}")
+    ok, detail = item["check"]()
+    if not ok:
+        raise SettingsError(f"{name} is still missing after the install")
+    return detail
+
+
+def cmd_doctor(a):
+    if a.install:
+        try:
+            print(f"{a.install}: {install_requirement(a.install)}")
+        except SettingsError as e:
+            fail(str(e))
+        return
+    d = doctor()
+    if a.json:
+        print(json.dumps(d, ensure_ascii=False, indent=2))
+        return
+    for i in d["items"]:
+        print(f"{'ok' if i['ok'] else 'MISSING'}  {i['id']}  {i['detail'] or i['hint']}")
+    sys.exit(0 if d["ok"] else 1)
+
+
+def open_window(url):
+    """Open the Studio in a window of its own. A plain browser tab when that is not possible."""
+    browser = find_browser() if (S or load_settings())["studio_window"] else None
+    if browser:
+        try:
+            subprocess.Popen([browser, f"--app={url}", f"--user-data-dir={config_dir() / 'profile'}", "--no-first-run",
+                              "--no-default-browser-check", "--window-size=1280,860"],
+                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                             start_new_session=True)
+            return
+        except OSError:
+            pass
+    webbrowser.open(url)
+
+
 # ---------- pages ----------
 def find_browser():
-    for c in [os.environ.get("EXAM_FORGE_BROWSER"), S.get("browser")] + BROWSER_CANDIDATES:
+    settings = S or load_settings()
+    for c in [os.environ.get("EXAM_FORGE_BROWSER"), settings.get("browser")] + BROWSER_CANDIDATES:
         if not c:
             continue
         p = Path(c).expanduser()
@@ -450,8 +586,8 @@ def cmd_render_pages(a):
     first, last = int(m.group(1)), int(m.group(2) or m.group(1))
     target = Path(a.out).expanduser()
     target.mkdir(parents=True, exist_ok=True)
-    try:
-        import fitz  # optional pymupdf
+    fitz = load_fitz()
+    if fitz:
         doc = fitz.open(str(pdf))
         last = min(last, doc.page_count)
         for i in range(first, last + 1):
@@ -459,8 +595,6 @@ def cmd_render_pages(a):
             doc[i - 1].get_pixmap(dpi=a.dpi).save(str(path))
             print(path)
         return
-    except ImportError:
-        pass
     if shutil.which("pdftoppm"):
         r = subprocess.run(["pdftoppm", "-png", "-r", str(a.dpi), "-f", str(first), "-l", str(last),
                             str(pdf), str(target / f"{pdf.stem}-p")], capture_output=True, text=True)
@@ -469,8 +603,7 @@ def cmd_render_pages(a):
         for p in sorted(target.glob(f"{pdf.stem}-p*.png")):
             print(p)
         return
-    print("ERROR: no page image tool found. Install one: 'pip install pymupdf' or "
-          "'brew install poppler' (Linux: 'apt-get install poppler-utils').", file=sys.stderr)
+    print("ERROR: no page image tool found. Run: forge.py doctor --install pdf_tool", file=sys.stderr)
     sys.exit(4)
 
 
@@ -1347,6 +1480,15 @@ def ensure_studio():
     fail(f"Studio did not start; see {log}")
 
 
+def page_open(base):
+    """True when a Studio page is already polling; it shows the new request by itself."""
+    try:
+        with urllib.request.urlopen(base + "/api/ping", timeout=2) as r:
+            return bool(json.load(r).get("watching"))
+    except (OSError, ValueError):
+        return False
+
+
 def intake_open(a):
     box = intake_dir()
     for name in ("job.json", "cancel.json"):
@@ -1357,9 +1499,10 @@ def intake_open(a):
         fail(str(e))
     write_atomic(box / "request.json", {"id": os.urandom(6).hex(), "t": now_iso(), "pdfs": pdfs,
                                         "notes": a.notes or ""})
-    url = ensure_studio() + "/?tab=job"
-    if S["studio_auto_open"] and not a.no_open:
-        webbrowser.open(url)
+    base = ensure_studio()
+    url = base + "/?tab=job"
+    if S["studio_auto_open"] and not a.no_open and not page_open(base):
+        open_window(url)
     print(json.dumps({"url": url}))
 
 
@@ -1446,6 +1589,8 @@ def main():
     global S
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
+    p = sub.add_parser("doctor"); p.add_argument("--json", action="store_true"); p.add_argument("--install")
+    p.set_defaults(f=cmd_doctor)
     p = sub.add_parser("settings")
     p.set_defaults(f=lambda a: print(json.dumps(S, ensure_ascii=False, indent=2)))
     p = sub.add_parser("config")

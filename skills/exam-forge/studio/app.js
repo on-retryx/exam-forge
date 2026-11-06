@@ -657,11 +657,70 @@
     dlgAsk.showModal();
   }
 
+  /* ---------- start screen ---------- */
+  const boot = { items: null, shown: 0 };
+  const session = {
+    get(k) { try { return sessionStorage.getItem(k); } catch (e) { return null; } },
+    set(k, v) { try { sessionStorage.setItem(k, v); } catch (e) { /* private mode */ } },
+  };
+
+  function renderBoot() {
+    if ($("boot").hidden || !boot.items) return;
+    const rows = [...boot.items, { id: "session", ok: form.session, required: false, detail: "" }];
+    const list = $("boot-list");
+    list.innerHTML = "";
+    rows.slice(0, boot.shown).forEach((item) => {
+      const li = document.createElement("li"), mark = document.createElement("span"), text = document.createElement("span"), note = document.createElement("small");
+      mark.className = `mark ${item.ok ? "ok" : "no"}`; mark.textContent = item.ok ? "✓" : "✗";
+      text.textContent = T("dep_" + item.id);
+      note.textContent = item.ok ? item.detail : (item.id === "session" ? T("dep_session_no") : T("dep_missing"));
+      text.append(note); li.append(mark, text);
+      if (!item.ok && item.can_install) {
+        const b = document.createElement("button");
+        b.type = "button"; b.className = "chip"; b.textContent = T("boot_install");
+        b.onclick = () => installDep(item.id, b);
+        li.append(b);
+      }
+      list.append(li);
+    });
+    const done = boot.shown >= rows.length;
+    $("boot-bar").style.width = `${Math.round(boot.shown / rows.length * 100)}%`;
+    $("boot-start").disabled = !done;
+    $("boot-start").textContent = T(done && !boot.items.every((i) => i.ok || !i.required) ? "boot_anyway" : "boot_start");
+  }
+
+  async function checkBoot() {
+    try { boot.items = (await getJson("/api/doctor")).items; } catch (e) { boot.items = []; }
+    renderBoot();
+  }
+
+  async function installDep(id, button) {
+    button.disabled = true; button.textContent = T("boot_installing");
+    $("boot-error").textContent = "";
+    const d = await postJson("/api/install", { id }).catch(() => ({ ok: false, error: T("err_upload") }));
+    if (!d.ok) { $("boot-error").textContent = d.error; button.disabled = false; button.textContent = T("boot_install"); return; }
+    await checkBoot();
+  }
+
+  async function startBoot() {
+    if (url.get("boot") === "0" || session.get("forge.booted")) return;
+    $("boot").hidden = false;
+    await checkBoot();
+    const total = boot.items.length + 1;
+    while (boot.shown < total) {
+      boot.shown++; renderBoot();
+      await new Promise((ok) => setTimeout(ok, matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 260));
+    }
+  }
+  $("boot-start").onclick = () => { session.set("forge.booted", "1"); $("boot").hidden = true; };
+
   async function pollIntake() {
     try {
       const d = await getJson("/api/intake");
       form.session = d.session;
+      renderBoot();
       if (d.request && d.request.id !== form.requestId) {
+        if (form.requestId) showTab("job");  // a new /exam-forge call while the window was already open
         form.requestId = d.request.id;
         form.pdfs = d.request.pdfs.slice();
         $("job-notes").value = d.request.notes || "";
@@ -864,6 +923,7 @@
     try { st.settings = await getJson("/api/settings"); office.speech = st.settings.values.studio_speech_bubbles; } catch (e) { /* shown empty */ }
     applyStaticText();
     await pollIntake();
+    startBoot();
     if (url.get("tab") === "job") showTab("job");
     await pollRuns();
     if (st.mode === "demo" && !demoTimer) startDemo();

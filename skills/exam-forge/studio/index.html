@@ -8,6 +8,18 @@
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
+<section id="boot" hidden>
+  <div class="boot-card">
+    <span class="logo" aria-hidden="true"></span>
+    <h1>EXAM FORGE</h1>
+    <p data-i18n="boot_sub"></p>
+    <div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="100"><span id="boot-bar"></span></div>
+    <ul id="boot-list"></ul>
+    <p id="boot-error" class="err" role="alert"></p>
+    <button type="button" id="boot-start" class="chip primary" disabled data-i18n="boot_start"></button>
+  </div>
+</section>
+
 <header class="top">
   <div class="brand"><span class="logo" aria-hidden="true"></span><h1>EXAM FORGE <em>STUDIO</em></h1></div>
   <nav class="tabs" role="tablist">
