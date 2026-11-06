@@ -30,7 +30,7 @@ Exam Forge is a [Claude Code](https://claude.com/claude-code) plugin. A team of 
 <p align="center">
   <img src="docs/office.gif" alt="Animated Studio office: pixel bots write, screen and review questions at their desks" width="820">
 </p>
-<p align="center"><sub>The Studio's demo run, sped up.</sub></p>
+<p align="center"><sub>The Studio's demo run at normal speed.</sub></p>
 
 ## Why
 
