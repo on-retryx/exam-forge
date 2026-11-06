@@ -106,6 +106,36 @@
    }
   },
   {
+   "key": "book_contents",
+   "group": "book",
+   "type": "enum",
+   "label": {
+    "en": "Contents page",
+    "tr": "İçindekiler sayfası"
+   },
+   "help": {
+    "en": "Whether the printed book has a contents page.",
+    "tr": "Basılan kitapta içindekiler sayfası olup olmayacağı."
+   },
+   "values": [
+    "ask",
+    "always",
+    "never"
+   ],
+   "value_labels": {
+    "en": {
+     "ask": "Ask every time",
+     "always": "Always include",
+     "never": "Never include"
+    },
+    "tr": {
+     "ask": "Her seferinde sor",
+     "always": "Her zaman olsun",
+     "never": "Hiç olmasın"
+    }
+   }
+  },
+  {
    "key": "book_language",
    "group": "book",
    "type": "enum",
@@ -200,8 +230,8 @@
     "tr": "Zorluk dağılımı"
    },
    "help": {
-    "en": "Easy, medium and hard shares; must sum to 1.",
-    "tr": "Kolay, orta ve zor oranları; toplamı 1 olmalı."
+    "en": "Easy, medium and hard shares. The three always add up to 100%.",
+    "tr": "Kolay, orta ve zor oranları. Üçünün toplamı her zaman %100 olur."
    }
   },
   {
@@ -467,6 +497,32 @@
    "help": {
     "en": "Opens the office view when a job starts.",
     "tr": "İş başlayınca ofis görünümünü açar."
+   }
+  },
+  {
+   "key": "studio_window",
+   "group": "advanced",
+   "type": "bool",
+   "label": {
+    "en": "Open in its own window",
+    "tr": "Kendi penceresinde aç"
+   },
+   "help": {
+    "en": "Open the Studio as a separate app window. Off, or with no Chromium browser, it opens as a browser tab.",
+    "tr": "Studio'yu ayrı bir uygulama penceresi olarak açar. Kapalıysa ya da Chromium tabanlı tarayıcı yoksa tarayıcı sekmesinde açılır."
+   }
+  },
+  {
+   "key": "studio_job_form",
+   "group": "advanced",
+   "type": "bool",
+   "label": {
+    "en": "Start jobs from the Studio",
+    "tr": "İşleri Studio'dan başlat"
+   },
+   "help": {
+    "en": "A job opens a form in the Studio instead of asking in the chat.",
+    "tr": "İş, soruları sohbette sormak yerine Studio'da bir form açar."
    }
   },
   {

@@ -20,7 +20,7 @@
   let demoTimer = null;
 
   function freshJob() {
-    return { team: {}, chunks: {}, order: [], plan: 0, rewrites: 0, feed: [], phase: "phase_idle", cost: null, title: "" };
+    return { team: {}, chunks: {}, order: [], plan: 0, rewrites: 0, feed: [], phase: "phase_idle", cost: null, title: "", books: [] };
   }
 
   const T = (k) => I18N[st.lang][k] ?? k;
@@ -40,12 +40,22 @@
 
   function setupTeam(e) {
     const chunks = e.pdfs.reduce((n, p) => n + p.chunks, 0);
-    job.team = e.team; job.plan = e.pdfs.reduce((n, p) => n + p.questions, 0);
+    job.team = e.team; job.budget = e.budget; job.plan = e.pdfs.reduce((n, p) => n + p.questions, 0);
     job.title = e.pdfs.map((p) => p.stem).join(" + ");
     e.pdfs.forEach((p) => { for (let c = 1; c <= p.chunks; c++) chunkOf({ pdf: p.stem, chunk: c }); });
     office.reseed();
     office.setup(e.team, chunks, chunks);
     return chunks;
+  }
+
+  function costText() {
+    const total = job.cost && job.cost.agents ? job.cost.total : null, b = job.budget;
+    if (b && b.unit === "tokens") {
+      const used = total ? total.input + total.output + total.cache_read + total.cache_write : 0;
+      return `${(used / 1e6).toFixed(1)} / ${(b.amount / 1e6).toFixed(1)} M`;
+    }
+    const spent = total ? "$" + total.usd.toFixed(2) : "–";
+    return b ? `${spent} / $${b.amount}` : spent;
   }
 
   const labelOf = (a) => {
@@ -156,7 +166,14 @@
         job.phase = "phase_done";
         setTask(office.chief, "task_done", {});
         post(e, { key: "ev_render", data: { name: String(e.out || "").split(/[\\/]/).pop() }, tone: "good" }, office.chief);
+        if (e.out) job.books.push({ out: e.out, pdf: !e.html_only });
         if (anim) { office.printing = 3; office.float(Office.spots.PRINTER.x, 30, T("printed"), "#22c55e"); office.cheerAll(T("say_printed")); }
+        break;
+      case "ask":
+        post(e, { key: "ev_ask", data: {} }, office.chief);
+        break;
+      case "answer":
+        post(e, { key: "ev_answer", data: {} }, office.chief);
         break;
     }
   }
@@ -181,7 +198,7 @@
     $("s-verified").textContent = `${verified} / ${total}`;
     $("s-rewrites").textContent = job.rewrites;
     $("s-chunks").textContent = `${cs.filter((c) => c.stage === "done").length} / ${cs.length}`;
-    $("s-cost").textContent = job.cost && job.cost.agents ? "$" + job.cost.total.usd.toFixed(2) : "–";
+    $("s-cost").textContent = costText();
     office.boardTitle = job.title;
     office.board = cs.map((c) => ({ stage: c.stage, share: c.stage === "done" ? 1 : c.questions ? Math.max(0.08, c.verified / c.questions) : 0.08 }));
     const team = job.team, nE = office.editors.length, nR = office.reviewers.length;
@@ -201,9 +218,22 @@
       span.textContent = entryText(f);
       li.append(time, span); feed.append(li);
     });
+    const books = st.mode === "demo" ? [] : job.books;
+    $("books-box").hidden = !books.length;
+    $("books").innerHTML = "";
+    books.forEach((b, i) => {
+      const li = document.createElement("li"), path = document.createElement("span");
+      path.textContent = b.out; li.append(path);
+      if (b.pdf) {
+        const a = document.createElement("a");
+        a.href = `/book?run=${st.runId}&n=${i}`; a.target = "_blank"; a.rel = "noopener"; a.className = "chip"; a.textContent = T("open_book");
+        li.append(a);
+      }
+      $("books").append(li);
+    });
     const banner = $("banner");
     banner.hidden = false;
-    banner.textContent = st.mode === "demo" ? T("demo_banner") : st.mode === "live" ? T("live_banner") : T("past_banner");
+    banner.textContent = T({ demo: "demo_banner", live: "live_banner", waiting: "job_sent" }[st.mode] || "past_banner");
   }
 
   function renderRunSelect() {
@@ -224,8 +254,12 @@
     });
     $("office").setAttribute("aria-label", T("canvas_label"));
     office.labels = { pass: T("pass"), fail: T("fail"), printed: T("printed") };
+    document.querySelectorAll("[data-i18n-label]").forEach((n) => { n.setAttribute("aria-label", T(n.dataset.i18nLabel)); });
     renderRunSelect();
     renderSettings();
+    renderJobOptions();
+    jobDefaults();
+    renderJob();
     render();
   }
 
@@ -367,6 +401,11 @@
       if (st.selected === "auto") {
         const r = st.runs[0];
         if (r && isActive(r)) { if (st.runId !== r.id || st.mode !== "live") await loadRun(r.id, "live"); }
+        else if (r && r.id === st.runId && (st.mode === "live" || st.mode === "past")) {
+          /* A finished job stays on screen so its book can be opened; later books refresh it. */
+          if (st.mode === "live" || st.seen !== r.last) { st.seen = r.last; await loadRun(r.id, "past"); }
+        }
+        else if (st.mode === "waiting" && Date.now() - form.sentAt < SENT_MS) { /* the session is planning */ }
         else if (st.mode !== "demo") startDemo();
       }
     } catch (e) { /* server gone */ }
@@ -454,6 +493,32 @@
 
   const getValue = (obj, key) => key.split(".").reduce((o, p) => (o ? o[p] : undefined), obj);
 
+  /* Moving one slider shares the difference between the other two, in 5% steps,
+     so the three always add up to 100%. */
+  function rebalance(mix, moved, to) {
+    const [a, b] = ["easy", "medium", "hard"].filter((k) => k !== moved), rest = 100 - to;
+    const weight = mix[a] + mix[b] ? mix[a] / (mix[a] + mix[b]) : 0.5;
+    const first = Math.min(rest, Math.round(rest * weight / 5) * 5);
+    return { [moved]: to, [a]: first, [b]: rest - first };
+  }
+
+  function mixSliders(value, onChange) {
+    const box = document.createElement("div"); box.className = "mix";
+    let mix = { easy: Math.round(value.easy * 100), medium: Math.round(value.medium * 100), hard: Math.round(value.hard * 100) };
+    const rows = {};
+    const show = () => Object.entries(rows).forEach(([k, r]) => { r.input.value = mix[k]; r.out.textContent = `%${mix[k]}`; });
+    ["easy", "medium", "hard"].forEach((k) => {
+      const l = document.createElement("label"), name = document.createElement("span"), out = document.createElement("output");
+      const i = document.createElement("input");
+      name.textContent = T(k); i.type = "range"; i.min = 0; i.max = 100; i.step = 5; i.setAttribute("aria-label", T(k));
+      i.oninput = () => { mix = rebalance(mix, k, +i.value); show(); };
+      i.onchange = () => onChange({ easy: mix.easy / 100, medium: mix.medium / 100, hard: mix.hard / 100 });
+      rows[k] = { input: i, out }; l.append(name, i, out); box.append(l);
+    });
+    show();
+    return box;
+  }
+
   function control(spec, value, onChange) {
     const id = "f-" + spec.key.replace(/\W/g, "-");
     if (spec.type === "enum") {
@@ -472,17 +537,7 @@
       const i = document.createElement("input"); i.type = "checkbox"; i.id = id; i.checked = !!value;
       i.onchange = () => onChange(i.checked); return i;
     }
-    if (spec.type === "mix") {
-      const box = document.createElement("div"); box.className = "mix";
-      const inputs = {};
-      ["easy", "medium", "hard"].forEach((k) => {
-        const l = document.createElement("label"); l.textContent = T(k);
-        const i = document.createElement("input"); i.type = "number"; i.step = "0.05"; i.min = 0; i.max = 1; i.value = value[k];
-        inputs[k] = i; l.append(i); box.append(l);
-        i.onchange = () => onChange({ easy: +inputs.easy.value, medium: +inputs.medium.value, hard: +inputs.hard.value });
-      });
-      return box;
-    }
+    if (spec.type === "mix") return mixSliders(value, onChange);
     if (spec.type === "json") {
       const t = document.createElement("textarea"); t.id = id; t.value = JSON.stringify(value, null, 1);
       t.onchange = () => { try { onChange(JSON.parse(t.value)); } catch (e) { onChange(null); } };
@@ -526,6 +581,405 @@
     });
   }
 
+  /* ---------- job form ---------- */
+  const SENT_MS = 3 * 60 * 1000;
+  const FORMATS = ["mcq", "open", "mixed", "full-mix"];
+  const form = { pdfs: [], requestId: null, session: false, askId: null, sentAt: 0, ready: false, uploading: false,
+    mix: null, team: {}, effort: {}, mode: "manual", touched: false, opus: undefined, sources: "" };
+  const postJson = (u, body) => fetch(u, {
+    method: "POST", headers: { "Content-Type": "application/json", "X-Forge-Token": TOKEN }, body: JSON.stringify(body),
+  }).then((r) => r.json());
+  const errorText = (e) => (I18N[st.lang]["err_" + e] ?? e);
+
+  function setOptions(sel, entries) {
+    const keep = sel.value;
+    sel.innerHTML = "";
+    entries.forEach(([v, label]) => { const o = document.createElement("option"); o.value = v; o.textContent = label; sel.append(o); });
+    if (keep && entries.some(([v]) => v === keep)) sel.value = keep;
+  }
+
+  function jobDefaults() {
+    if (form.ready || !st.settings) return;
+    form.ready = true;
+    const v = st.settings.values;
+    renderJobOptions();
+    $("job-options").value = String(v.mcq_options);
+    $("job-answers").value = v.answer_placement;
+    $("job-merge").checked = v.merge_books !== "never";
+    $("job-field").value = v.field || "";
+    $("job-contents").checked = v.book_contents !== "never";
+    form.mix = v.difficulty_mix;
+    renderJobOptions();
+  }
+
+  /* ---------- team and cost ---------- */
+  const ROLES = [["editor", "role_editor"], ["screener", "role_screener"], ["reviewer", "role_reviewer"], ["chief_editor", "role_chief"]];
+  const EFFORTS = ["low", "medium", "high", "xhigh", "max"];
+  const CAN_BE_OFF = ["screener", "chief_editor"];
+  const millions = (n) => `${(n / 1e6).toFixed(1)} M`;
+  const money = (n) => `$${n.toFixed(2)}`;
+  let estimateTimer = 0, estimateSeq = 0;
+
+  function renderTeam() {
+    const box = $("job-team");
+    box.replaceChildren();
+    ["job_role", "job_model", "job_effort"].forEach((k) => { const b = document.createElement("b"); b.textContent = T(k); box.append(b); });
+    ROLES.forEach(([role, label]) => {
+      const name = document.createElement("span"), model = document.createElement("select"), effort = document.createElement("select");
+      name.textContent = T(label);
+      const families = [["haiku", "Haiku"], ["sonnet", "Sonnet"], ["opus", form.opus === false ? `Opus (${T("job_no_access")})` : "Opus"]];
+      setOptions(model, CAN_BE_OFF.includes(role) ? [["", T("job_off")], ...families] : families);
+      setOptions(effort, EFFORTS.map((e) => [e, T("effort_" + e)]));
+      model.value = form.team[role] ?? ""; effort.value = form.effort[role] || "high";
+      effort.disabled = !model.value;
+      model.setAttribute("aria-label", `${T(label)}: ${T("job_model")}`); effort.setAttribute("aria-label", `${T(label)}: ${T("job_effort")}`);
+      const edited = () => { form.team[role] = model.value; form.effort[role] = effort.value; form.touched = true; effort.disabled = !model.value; setMode("manual"); };
+      model.onchange = edited; effort.onchange = edited;
+      box.append(name, model, effort);
+    });
+  }
+
+  function setMode(mode) {
+    form.mode = mode;
+    document.querySelectorAll("[data-mode]").forEach((b) => b.setAttribute("aria-checked", String(b.dataset.mode === mode)));
+    $("job-budget-row").hidden = mode !== "budget";
+    scheduleEstimate();
+  }
+
+  function applyDefaults(d) {
+    if (!d || (form.opus === d.opus && form.team.editor !== undefined)) return;
+    form.opus = d.opus;
+    if (!form.touched && form.mode === "manual") { form.team = d.team; form.effort = d.effort; }
+    renderTeam();
+    scheduleEstimate();
+  }
+
+  function budgetOf() {
+    const amount = parseFloat($("job-budget").value);
+    return form.mode === "budget" && amount > 0 ? { unit: $("job-unit").value, amount } : null;
+  }
+
+  function scheduleEstimate() { clearTimeout(estimateTimer); estimateTimer = setTimeout(runEstimate, 250); }
+
+  async function runEstimate() {
+    const out = $("job-estimate"), warn = $("job-warning"), seq = ++estimateSeq;
+    warn.textContent = "";
+    if (!form.pdfs.length || form.team.editor === undefined) { out.textContent = T("job_estimate_empty"); return; }
+    const d = await postJson("/api/estimate", { pdfs: form.pdfs, team: form.team, effort: form.effort, budget: budgetOf() }).catch(() => null);
+    if (seq !== estimateSeq || !d) return;
+    if (!d.ok) { out.textContent = d.error || T("err_upload"); return; }
+    if (d.team) { form.team = d.team; form.effort = d.effort; renderTeam(); }
+    const e = d.estimate;
+    out.textContent = fill("job_estimate", { low: money(e.usd_low), high: money(e.usd_high), tokens: millions(e.tokens), pages: d.pages, questions: d.questions });
+    const notes = [];
+    if (d.reachable === false) notes.push(fill("job_unreachable", { min: $("job-unit").value === "usd" ? money(d.minimum) : millions(d.minimum) }));
+    if (form.team.reviewer === "haiku" || form.team.editor === "haiku") notes.push(T("job_warn_haiku"));
+    if (form.opus !== true && Object.values(form.team).includes("opus")) notes.push(T("job_warn_opus"));
+    warn.textContent = notes.join(" ");
+  }
+
+  function renderJobOptions() {
+    setOptions($("job-format"), FORMATS.map((f) => [f, T("fmt_" + f)]));
+    setOptions($("job-options"), [["4", "4"], ["5", "5"]]);
+    const spec = st.settings && st.settings.schema.settings.find((s) => s.key === "answer_placement");
+    if (spec) setOptions($("job-answers"), spec.values.map((v) => [v, spec.value_labels[st.lang][v]]));
+    setOptions($("job-unit"), [["usd", "USD"], ["tokens", T("job_tokens")]]);
+    if (form.mix) $("job-mix").replaceChildren(mixSliders(form.mix, (mix) => { form.mix = mix; }));
+    renderTeam();
+  }
+
+  function renderJob() {
+    const list = $("job-pdfs");
+    list.innerHTML = "";
+    form.pdfs.forEach((path) => {
+      const li = document.createElement("li"), span = document.createElement("span"), rm = document.createElement("button");
+      const folder = document.createElement("small");
+      span.textContent = baseName(path); span.title = path; folder.textContent = path.slice(0, -baseName(path).length); span.append(folder);
+      rm.type = "button"; rm.className = "chip"; rm.textContent = T("job_remove");
+      rm.onclick = () => { form.pdfs = form.pdfs.filter((p) => p !== path); $("job-error").textContent = ""; renderJob(); };
+      li.append(span, rm); list.append(li);
+    });
+    list.hidden = !form.pdfs.length;
+    const sources = form.pdfs.join("|");
+    if (sources !== form.sources) { form.sources = sources; scheduleEstimate(); }
+    const fmt = $("job-format").value;
+    $("job-options-row").hidden = fmt !== "mcq" && fmt !== "full-mix";
+    $("job-contents-row").hidden = !st.settings || st.settings.values.book_contents !== "ask";
+    $("job-merge-row").hidden = form.pdfs.length < 2 || !st.settings || st.settings.values.merge_books !== "ask";
+    $("job-session").textContent = form.session ? T("job_ready") : T("job_no_session");
+    $("job-session").className = form.session ? "intro" : "intro warn";
+    $("job-start").disabled = !form.session || !form.pdfs.length || form.uploading;
+    $("job-cancel").hidden = !form.session;
+  }
+
+  function addPdfs(paths) {
+    paths.forEach((p) => { if (p && !form.pdfs.includes(p)) form.pdfs.push(p); });
+    $("job-error").textContent = "";
+    renderJob();
+  }
+
+  function showAsk(ask) {
+    const dlgAsk = $("ask");
+    if (!ask) { form.askId = null; if (dlgAsk.open) dlgAsk.close(); return; }
+    if (form.askId === ask.id) return;
+    form.askId = ask.id;
+    $("ask-text").textContent = ask.text;
+    $("ask-error").textContent = "";
+    const box = $("ask-options");
+    box.innerHTML = "";
+    ask.options.forEach((o, i) => {
+      const b = document.createElement("button");
+      b.type = "button"; b.className = i ? "chip" : "chip primary"; b.textContent = o.label;
+      b.onclick = async () => {
+        const d = await postJson("/api/answer", { run: ask.run, id: ask.id, value: o.value });
+        if (d.ok) dlgAsk.close(); else $("ask-error").textContent = d.error;
+      };
+      box.append(b);
+    });
+    dlgAsk.showModal();
+  }
+
+  /* ---------- start screen ---------- */
+  const boot = { items: null, shown: 0 };
+  const session = {
+    get(k) { try { return sessionStorage.getItem(k); } catch (e) { return null; } },
+    set(k, v) { try { sessionStorage.setItem(k, v); } catch (e) { /* private mode */ } },
+  };
+
+  function renderBoot() {
+    if ($("boot").hidden || !boot.items) return;
+    const rows = [...boot.items, { id: "session", ok: form.session, required: false, detail: "" }];
+    const list = $("boot-list");
+    list.innerHTML = "";
+    rows.slice(0, boot.shown).forEach((item) => {
+      const li = document.createElement("li"), mark = document.createElement("span"), text = document.createElement("span"), note = document.createElement("small");
+      const waiting = !item.ok && item.id === "session";  // normal when the Studio was opened on its own
+      mark.className = `mark ${item.ok ? "ok" : waiting ? "wait" : "no"}`; mark.textContent = item.ok ? "✓" : waiting ? "·" : "✗";
+      text.textContent = T("dep_" + item.id);
+      note.textContent = item.ok ? item.detail : (item.id === "session" ? T("dep_session_no") : T("dep_missing"));
+      text.append(note); li.append(mark, text);
+      if (!item.ok && item.can_install) {
+        const b = document.createElement("button");
+        b.type = "button"; b.className = "chip"; b.textContent = T("boot_install");
+        b.onclick = () => installDep(item.id, b);
+        li.append(b);
+      }
+      list.append(li);
+    });
+    const done = boot.shown >= rows.length;
+    $("boot-bar").style.width = `${Math.round(boot.shown / rows.length * 100)}%`;
+    $("boot-start").disabled = !done;
+    $("boot-start").textContent = T(done && !boot.items.every((i) => i.ok || !i.required) ? "boot_anyway" : "boot_start");
+  }
+
+  async function checkBoot() {
+    try { boot.items = (await getJson("/api/doctor")).items; } catch (e) { boot.items = []; }
+    renderBoot();
+  }
+
+  async function installDep(id, button) {
+    button.disabled = true; button.textContent = T("boot_installing");
+    $("boot-error").textContent = "";
+    const d = await postJson("/api/install", { id }).catch(() => ({ ok: false, error: T("err_upload") }));
+    if (!d.ok) { $("boot-error").textContent = d.error; button.disabled = false; button.textContent = T("boot_install"); return; }
+    await checkBoot();
+  }
+
+  async function startBoot() {
+    if (url.get("boot") === "0" || session.get("forge.booted")) return;
+    $("boot").hidden = false;
+    await checkBoot();
+    const total = boot.items.length + 1;
+    while (boot.shown < total) {
+      boot.shown++; renderBoot();
+      await new Promise((ok) => setTimeout(ok, matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 260));
+    }
+  }
+  $("boot-start").onclick = () => { session.set("forge.booted", "1"); $("boot").hidden = true; };
+
+  async function pollIntake() {
+    try {
+      const d = await getJson("/api/intake");
+      form.session = d.session;
+      renderBoot();
+      applyDefaults(d.defaults);
+      if (d.request && d.request.id !== form.requestId) {
+        if (form.requestId) showTab("job");  // a new /exam-forge call while the window was already open
+        form.requestId = d.request.id;
+        form.pdfs = d.request.pdfs.slice();
+        $("job-notes").value = d.request.notes || "";
+      }
+      renderJob();
+      showAsk(d.ask);
+    } catch (e) { /* server gone */ }
+  }
+
+  $("job-format").onchange = renderJob;
+  document.querySelectorAll("[data-mode]").forEach((b) => { b.onclick = () => setMode(b.dataset.mode); });
+  $("job-budget").oninput = scheduleEstimate;
+  $("job-unit").onchange = scheduleEstimate;
+  setMode("manual");
+  $("ask").addEventListener("cancel", (ev) => ev.preventDefault());
+  /* The browser hides the real path of a dropped file, so drops are uploaded. */
+  const isPdf = (name) => /\.pdf$/i.test(name) && !name.startsWith(".");
+  const readBatch = (reader) => new Promise((ok, no) => reader.readEntries(ok, no));
+  const fileOf = (entry) => new Promise((ok, no) => entry.file(ok, no));
+
+  async function filesIn(entry) {
+    if (entry.name.startsWith(".")) return [];
+    if (entry.isFile) return isPdf(entry.name) ? [await fileOf(entry)] : [];
+    const reader = entry.createReader(), out = [];
+    for (;;) {
+      const batch = await readBatch(reader);
+      if (!batch.length) return out;
+      for (const e of batch) out.push(...await filesIn(e));
+    }
+  }
+
+  async function uploadAll(files) {
+    const note = $("job-upload"), batch = new Date().toISOString().replace(/\D/g, "").slice(0, 14);
+    form.uploading = true; renderJob();
+    try {
+      for (let i = 0; i < files.length; i++) {
+        note.textContent = fill("job_uploading", { n: i + 1, total: files.length, name: files[i].name });
+        const res = await fetch(`/api/upload?batch=${batch}&name=${encodeURIComponent(files[i].name)}`, {
+          method: "POST", headers: { "Content-Type": "application/pdf", "X-Forge-Token": TOKEN }, body: files[i],
+        });
+        const d = await res.json();
+        if (!d.ok) { $("job-error").textContent = errorText(d.error); return; }
+        addPdfs([d.path]);
+      }
+    } catch (e) { $("job-error").textContent = T("err_upload"); } finally {
+      note.textContent = ""; form.uploading = false; renderJob();
+    }
+  }
+
+  async function dropped(items, loose) {
+    $("job-error").textContent = "";
+    const picked = items.length ? items.map((i) => ({ entry: i.webkitGetAsEntry && i.webkitGetAsEntry(), file: i.getAsFile() }))
+      : loose.map((file) => ({ entry: null, file }));
+    const files = [];
+    try {
+      for (const { entry, file } of picked) {
+        if (entry) files.push(...await filesIn(entry));
+        else if (file && isPdf(file.name)) files.push(file);
+      }
+    } catch (e) { $("job-error").textContent = T("err_read"); return; }
+    if (!files.length) { $("job-error").textContent = T("err_no_pdfs"); return; }
+    await uploadAll(files);
+  }
+
+  /* The whole window takes drops, so a file let go over an open dialog or the header
+     is never lost. Only file drags count: text dragged into a field works as usual.
+     The veil is a popover because an open modal dialog would otherwise cover it. */
+  const veil = $("drop-veil");
+  let veilTimer = 0;
+  const hasFiles = (ev) => ev.dataTransfer && [...ev.dataTransfer.types].includes("Files");
+  function showVeil(on) {
+    $("job-drop").classList.toggle("over", on);
+    if (veil.matches(":popover-open") !== on) veil.togglePopover();
+  }
+  ["dragenter", "dragover"].forEach((type) => window.addEventListener(type, (ev) => {
+    if (!hasFiles(ev)) return;
+    ev.preventDefault();
+    ev.dataTransfer.dropEffect = "copy";
+    showVeil(true);
+    clearTimeout(veilTimer);
+    veilTimer = setTimeout(() => showVeil(false), 200);  // dragover stops when the file leaves the window
+  }));
+  window.addEventListener("drop", (ev) => {
+    if (!hasFiles(ev)) return;
+    ev.preventDefault();
+    clearTimeout(veilTimer);
+    showVeil(false);
+    if ($("browse").open) $("browse").close();
+    showTab("job");
+    dropped([...ev.dataTransfer.items].filter((i) => i.kind === "file"), [...ev.dataTransfer.files]);
+  });
+
+  /* ---------- file browser ---------- */
+  const browse = { path: "", parent: null, entries: [], places: [], chosen: new Set() };
+  const baseName = (p) => p.split(/[\\/]/).filter(Boolean).pop() || p;
+
+  function renderBrowser() {
+    $("browse-path").value = browse.path;
+    $("browse-up").disabled = !browse.parent;
+    const places = $("browse-places");
+    places.innerHTML = "";
+    browse.places.forEach((pl) => {
+      const b = document.createElement("button");
+      b.type = "button"; b.className = "chip"; b.textContent = T("place_" + pl.key); b.onclick = () => browseTo(pl.path);
+      places.append(b);
+    });
+    const list = $("browse-list");
+    list.innerHTML = "";
+    if (!browse.entries.length) {
+      const li = document.createElement("li"); li.className = "empty"; li.textContent = T("browse_empty"); list.append(li);
+    }
+    browse.entries.forEach((e) => {
+      const li = document.createElement("li"), box = document.createElement("input"), open = document.createElement("button");
+      box.type = "checkbox"; box.checked = browse.chosen.has(e.path); box.setAttribute("aria-label", e.name);
+      box.onchange = () => { if (box.checked) browse.chosen.add(e.path); else browse.chosen.delete(e.path); renderCount(); };
+      open.type = "button"; open.className = e.dir ? "dir" : "file"; open.textContent = (e.dir ? "▸ " : "") + e.name;
+      open.onclick = () => { if (e.dir) browseTo(e.path); else box.click(); };
+      li.append(box, open); list.append(li);
+    });
+    renderCount();
+  }
+
+  function renderCount() {
+    $("browse-count").textContent = browse.chosen.size ? fill("browse_count", { n: browse.chosen.size }) : "";
+    $("browse-add").disabled = !browse.chosen.size;
+    $("browse-here").disabled = !browse.path || browse.chosen.has(browse.path);
+  }
+
+  async function browseTo(path) {
+    const d = await postJson("/api/browse", { path });
+    $("browse-error").textContent = d.ok ? "" : d.error;
+    if (!d.ok) return;
+    Object.assign(browse, { path: d.path, parent: d.parent, entries: d.entries, places: d.places });
+    if (d.file) browse.chosen.add(d.file);
+    renderBrowser();
+    $("browse-list").scrollTop = 0;
+  }
+
+  $("job-pick").onclick = async () => {
+    browse.chosen.clear();
+    await browseTo(browse.path);
+    $("browse").showModal();
+  };
+  $("browse-close").onclick = () => $("browse").close();
+  $("browse-up").onclick = () => browseTo(browse.parent);
+  $("browse-go").onsubmit = (ev) => { ev.preventDefault(); browseTo($("browse-path").value); };
+  $("browse-here").onclick = () => { browse.chosen.add(browse.path); renderCount(); };
+  $("browse-add").onclick = async () => {
+    const d = await postJson("/api/sources", { paths: [...browse.chosen] });
+    if (!d.ok) { $("browse-error").textContent = /^no PDFs/.test(d.error) ? `${T("err_no_pdfs")} (${baseName(d.error)})` : d.error; return; }
+    addPdfs(d.pdfs);
+    $("browse").close();
+  };
+  $("job-cancel").onclick = async () => {
+    const d = await postJson("/api/cancel", {});
+    if (d.ok) { form.pdfs = []; $("job-notes").value = ""; await pollIntake(); } else $("job-error").textContent = errorText(d.error);
+  };
+  $("job").onsubmit = async (ev) => {
+    ev.preventDefault();
+    $("job-error").textContent = "";
+    $("job-start").disabled = true;
+    const d = await postJson("/api/jobs", {
+      pdfs: form.pdfs, format: $("job-format").value, mcq_options: +$("job-options").value,
+      answer_placement: $("job-answers").value, merge: $("job-merge").checked,
+      notes: $("job-notes").value, field: $("job-field").value,
+      difficulty_mix: form.mix, contents: $("job-contents").checked,
+      team: form.team, effort: form.effort, budget: budgetOf(),
+    });
+    if (!d.ok) { $("job-error").textContent = errorText(d.error); renderJob(); return; }
+    form.pdfs = []; $("job-notes").value = ""; form.sentAt = Date.now();
+    stopDemo(); job = freshJob(); job.phase = "phase_plan";
+    st.mode = "waiting"; st.selected = "auto"; st.runId = null;
+    renderRunSelect(); render(); renderJob(); showTab("office");
+  };
+
   /* ---------- wiring ---------- */
   function applyTheme() {
     const root = document.documentElement;
@@ -535,13 +989,13 @@
   }
   matchMedia("(prefers-color-scheme: dark)").addEventListener("change", applyTheme);
 
-  document.querySelectorAll("[data-tab]").forEach((b) => {
-    b.onclick = () => {
-      document.querySelectorAll("[data-tab]").forEach((x) => x.setAttribute("aria-selected", String(x === b)));
-      $("office-tab").hidden = b.dataset.tab !== "office";
-      $("settings-tab").hidden = b.dataset.tab !== "settings";
-    };
-  });
+  function showTab(name) {
+    document.querySelectorAll("[data-tab]").forEach((x) => {
+      x.setAttribute("aria-selected", String(x.dataset.tab === name));
+      $(x.dataset.tab + "-tab").hidden = x.dataset.tab !== name;
+    });
+  }
+  document.querySelectorAll("[data-tab]").forEach((b) => { b.onclick = () => showTab(b.dataset.tab); });
   $("lang").onclick = () => { st.lang = st.lang === "tr" ? "en" : "tr"; store.set("forge.lang", st.lang); applyStaticText(); };
   document.querySelectorAll("[data-theme-choice]").forEach((b) => {
     b.onclick = () => { st.theme = b.dataset.themeChoice; store.set("forge.theme", st.theme); applyTheme(); applyStaticText(); };
@@ -557,10 +1011,14 @@
     applyTheme();
     try { st.settings = await getJson("/api/settings"); office.speech = st.settings.values.studio_speech_bubbles; } catch (e) { /* shown empty */ }
     applyStaticText();
+    await pollIntake();
+    startBoot();
+    if (url.get("tab") === "job") showTab("job");
     await pollRuns();
     if (st.mode === "demo" && !demoTimer) startDemo();
     setInterval(pollEvents, 1500);
     setInterval(pollRuns, 5000);
+    setInterval(pollIntake, 2000);
     setInterval(refreshCost, 20000);
   })();
 })();

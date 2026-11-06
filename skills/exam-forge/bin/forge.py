@@ -8,6 +8,8 @@ Commands:
   pages <pdf>                           Page count
   render-pages <pdf> <3-12> --out DIR   Rasterize pages to PNG (pymupdf or pdftoppm)
   plan <pdf>... [--run DIR]             Question counts, difficulty split, chunks
+       [--mix 0.2,0.5,0.3]              difficulty shares for this job
+       [--team editor=sonnet,...] [--effort editor=high,...] [--budget usd=5]
        [--pages file.pdf=N ...]         give the page count when it cannot be read
   check <chunk.json> [--format F] [--expected easy=2,medium=5,hard=3]
        [--mcq-options 4|5] [--min N]    --min allows a justified thin-page reduction
@@ -19,27 +21,46 @@ Commands:
   replace <chunk.json> <fix.json>       Swap questions that have the same id
   merge <pdf_dir>... --out book.json --title T --format F
        [--part file.pdf=Name ...] [--language en] [--titles logical|filename]
-  render <book.json> <out.pdf> [--answers book_end|inline|section_end] [--html F]
+  render <book.json> <out.pdf> [--answers book_end|inline|section_end] [--html F] [--no-contents]
   event <run> <type> [key=value ...]    Append an event by hand (hook fallback)
   cost <run>                            Tokens and estimated cost from transcripts
+  cost <run> --record                   Also learn from this run for later estimates
+  cost <run> --budget-check             Exit 6 once, when spending passes 120% of the target
+  doctor [--json] [--install ID]        Check what a job needs; install one item
+  models [--probe]                      Which model families this account can use
   studio [--port N] [--no-open]         Start the local office view
+  studio-url                            Start the Studio if needed and print its address
+  intake open [--pdf P ...] [--notes T]  Open the job form in the Studio
+  intake wait [--timeout S]             Wait for a job from the form (exit 4 timeout, 5 cancelled)
+  ask <run> --id I --text T --option v=Label ...  Ask in the Studio; prints the value
 
 Settings: defaults in ../settings.json, then ~/.config/exam-forge/settings.json,
 then the file named by EXAM_FORGE_SETTINGS. Only the keys present are overridden.
 """
 import argparse
 import datetime as dt
+import glob
 import html
+import importlib
+from itertools import product
+import hashlib
 import json
 import math
 import os
+import plistlib
 import random
 import re
+import shlex
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
+import urllib.request
+import webbrowser
 from pathlib import Path
+
+import app_icon  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 TEMPLATES = ROOT / "templates"
@@ -284,11 +305,13 @@ BROWSER_CANDIDATES = [
     "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
     "/Applications/Chromium.app/Contents/MacOS/Chromium",
     "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
-    "google-chrome", "google-chrome-stable", "chromium", "chromium-browser", "microsoft-edge",
+    "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
+    "google-chrome", "google-chrome-stable", "chromium", "chromium-browser", "microsoft-edge", "brave-browser",
     r"C:\Program Files\Google\Chrome\Application\chrome.exe",
     r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
     r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
     r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+    r"C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe",
 ]
 LABELS = {
     "en": {
@@ -391,9 +414,235 @@ def cmd_event(a):
     emit(Path(a.run).expanduser(), a.type, **data)
 
 
+# ---------- requirements ----------
+# One entry per thing a job needs. To require something new, add an entry here:
+# the skill, `doctor` and the Studio's start screen all read this table.
+def venv_dir():
+    return config_dir() / "venv"
+
+
+def load_fitz():
+    """pymupdf from this Python or from our own venv. None when neither has it."""
+    for site in glob.glob(str(venv_dir() / "lib" / "python*" / "site-packages")) + [str(venv_dir() / "Lib" / "site-packages")]:
+        if site not in sys.path and Path(site).is_dir():
+            sys.path.append(site)
+    for name in ("pymupdf", "fitz"):  # newer releases deprecate the old name
+        try:
+            return importlib.import_module(name)
+        except Exception:  # a venv built by another Python raises more than ImportError
+            continue
+    return None
+
+
+def check_python():
+    version = ".".join(map(str, sys.version_info[:3]))
+    return (sys.version_info >= (3, 9), version)
+
+
+def check_pdf_tool():
+    if load_fitz():
+        return True, "pymupdf"
+    return bool(shutil.which("pdftoppm")), "pdftoppm" if shutil.which("pdftoppm") else ""
+
+
+def check_browser():
+    b = find_browser()
+    return bool(b), Path(b).stem if b else ""
+
+
+def check_claude():
+    c = shutil.which("claude")
+    return bool(c), c or ""
+
+
+def venv_python():
+    return venv_dir() / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+
+
+def install_pymupdf():
+    """A private venv: it works on an externally managed Python and leaves the system one alone."""
+    return [[sys.executable, "-m", "venv", "--clear", str(venv_dir())],
+            [str(venv_python()), "-m", "pip", "install", "--quiet", "--disable-pip-version-check", "pymupdf"]]
+
+
+REQUIREMENTS = [
+    {"id": "python", "required": True, "check": check_python, "hint": "Python 3.9 or newer: https://www.python.org/downloads/"},
+    {"id": "pdf_tool", "required": True, "check": check_pdf_tool, "install": install_pymupdf,
+     "hint": "Run: forge.py doctor --install pdf_tool"},
+    {"id": "browser", "required": True, "check": check_browser,
+     "install": {"darwin": [["brew", "install", "--cask", "google-chrome"]],
+                 "win32": [["winget", "install", "-e", "--id", "Google.Chrome"]]},
+     "hint": "Install Chrome, Edge or Chromium, or set EXAM_FORGE_BROWSER."},
+    {"id": "claude", "required": False, "check": check_claude, "hint": "Claude Code CLI on PATH; used to see which models you can use."},
+]
+
+
+def install_steps(item):
+    plan = item.get("install")
+    if callable(plan):
+        return plan()
+    return (plan or {}).get(sys.platform)
+
+
+def doctor():
+    items = []
+    for item in REQUIREMENTS:
+        ok, detail = item["check"]()
+        items.append({"id": item["id"], "ok": ok, "required": item["required"], "detail": detail,
+                      "can_install": bool(install_steps(item)), "hint": item["hint"]})
+    return {"ok": all(i["ok"] for i in items if i["required"]), "items": items}
+
+
+def install_requirement(name):
+    """Run the fixed steps of one table entry. Callers must have the user's approval."""
+    item = next((x for x in REQUIREMENTS if x["id"] == name), None)
+    steps = install_steps(item) if item else None
+    if not steps:
+        raise SettingsError(f"cannot install '{name}' from here")
+    for step in steps:
+        try:
+            r = subprocess.run(step, capture_output=True, text=True, timeout=600, stdin=subprocess.DEVNULL)
+        except (OSError, subprocess.TimeoutExpired) as e:
+            raise SettingsError(f"{step[0]} failed: {e}")
+        if r.returncode != 0:
+            raise SettingsError(f"{Path(step[0]).name} failed: {(r.stderr or r.stdout)[-400:].strip()}")
+    ok, detail = item["check"]()
+    if not ok:
+        raise SettingsError(f"{name} is still missing after the install")
+    return detail
+
+
+def cmd_doctor(a):
+    if a.install:
+        try:
+            print(f"{a.install}: {install_requirement(a.install)}")
+        except SettingsError as e:
+            fail(str(e))
+        return
+    d = doctor()
+    if a.json:
+        print(json.dumps(d, ensure_ascii=False, indent=2))
+        return
+    for i in d["items"]:
+        print(f"{'ok' if i['ok'] else 'MISSING'}  {i['id']}  {i['detail'] or i['hint']}")
+    sys.exit(0 if d["ok"] else 1)
+
+
+MAC_APP = """
+ObjC.import('Cocoa');
+ObjC.import('WebKit');
+var win, view, closer, links;
+function run() {
+  var app = Application.currentApplication();
+  app.includeStandardAdditions = true;
+  var url;
+  try { url = app.doShellScript(COMMAND); } catch (e) { app.displayAlert('Exam Forge', { message: String(e) }); $.NSApp.terminate(null); return; }
+  ObjC.registerSubclass({
+    name: 'ForgeCloser', protocols: ['NSWindowDelegate'],
+    methods: { 'windowWillClose:': { types: ['void', ['id']], implementation: function () { $.NSApp.terminate(null); } } },
+  });
+  ObjC.registerSubclass({
+    name: 'ForgeLinks', protocols: ['WKUIDelegate'],
+    methods: {
+      'webView:createWebViewWithConfiguration:forNavigationAction:windowFeatures:': {
+        types: ['id', ['id', 'id', 'id', 'id']],
+        implementation: function (web, configuration, action) { $.NSWorkspace.sharedWorkspace.openURL(action.request.URL); return $(); },
+      },
+    },
+  });
+  closer = $.ForgeCloser.alloc.init;
+  links = $.ForgeLinks.alloc.init;
+  win = $.NSWindow.alloc.initWithContentRectStyleMaskBackingDefer($.NSMakeRect(0, 0, 1280, 860), 15, 2, false);
+  win.title = 'Exam Forge';
+  win.releasedWhenClosed = false;
+  win.delegate = closer;
+  view = $.WKWebView.alloc.initWithFrameConfiguration($.NSMakeRect(0, 0, 1280, 860), $.WKWebViewConfiguration.alloc.init);
+  view.autoresizingMask = 18;
+  view.UIDelegate = links;
+  win.contentView = view;
+  view.loadRequest($.NSURLRequest.requestWithURL($.NSURL.URLWithString(url)));
+  win.center;
+  win.makeKeyAndOrderFront(null);
+  $.NSApp.activateIgnoringOtherApps(true);
+}
+"""
+
+
+def mac_app():
+    """A real Mac app holding a web view, so the Dock shows our icon.
+
+    A browser started in app mode always keeps the browser's own icon. osacompile comes
+    with macOS, so this needs no Xcode. Clicked in the Dock, the app starts the Studio itself.
+    """
+    bundle = Path.home() / "Applications" / "Exam Forge.app"
+    command = f"{shlex.quote(sys.executable)} {shlex.quote(str(Path(__file__).resolve()))} studio-url"
+    source = MAC_APP.replace("COMMAND", json.dumps(command))
+    stamp = bundle / "Contents" / "Resources" / "exam-forge.js"
+    source += f"// icon {hashlib.sha256(app_icon.png(128)).hexdigest()}\n"  # a new icon rebuilds the app too
+    if stamp.is_file() and stamp.read_text(encoding="utf-8") == source:
+        return bundle
+    with tempfile.TemporaryDirectory() as td:
+        script, iconset = Path(td) / "app.js", Path(td) / "icon.iconset"
+        script.write_text(source, encoding="utf-8")
+        iconset.mkdir()
+        for size in (16, 32, 128, 256, 512):
+            (iconset / f"icon_{size}x{size}.png").write_bytes(app_icon.png(size))
+            (iconset / f"icon_{size}x{size}@2x.png").write_bytes(app_icon.png(size * 2))
+        bundle.parent.mkdir(exist_ok=True)
+        shutil.rmtree(bundle, ignore_errors=True)
+        subprocess.run(["osacompile", "-l", "JavaScript", "-s", "-o", str(bundle), str(script)], check=True, capture_output=True, timeout=60)
+        subprocess.run(["iconutil", "-c", "icns", str(iconset), "-o", str(bundle / "Contents" / "Resources" / "applet.icns")],
+                       check=True, capture_output=True, timeout=30)
+    # osacompile also ships a catalog holding the default script icon, and macOS prefers it to the .icns.
+    (bundle / "Contents" / "Resources" / "Assets.car").unlink(missing_ok=True)
+    info = bundle / "Contents" / "Info.plist"
+    plist = plistlib.loads(info.read_bytes())
+    plist.pop("CFBundleIconName", None)
+    plist.update(CFBundleIdentifier="co.retryx.examforge", CFBundleName="Exam Forge",
+                 NSAppTransportSecurity={"NSAllowsLocalNetworking": True, "NSAllowsArbitraryLoads": True})
+    info.write_bytes(plistlib.dumps(plist))
+    stamp.write_text(source, encoding="utf-8")
+    subprocess.run(["codesign", "-f", "-s", "-", "--deep", str(bundle)], check=True, capture_output=True, timeout=60)
+    return bundle
+
+
+def window_flags():
+    return [f"--user-data-dir={config_dir() / 'profile'}", "--no-first-run", "--no-default-browser-check",
+            "--window-size=1280,860"]
+
+
+def open_window(url):
+    """Open the Studio in a window of its own. A plain browser tab when that is not possible."""
+    if not (S or load_settings())["studio_window"]:
+        webbrowser.open(url)
+        return
+    if sys.platform == "darwin":
+        try:
+            subprocess.Popen(["open", "-a", str(mac_app())], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, start_new_session=True)
+            return
+        except (OSError, subprocess.SubprocessError):
+            pass  # an old macOS or a blocked tool: the browser window below still works
+    browser = find_browser(printing=False)
+    if browser:
+        try:
+            subprocess.Popen([browser, f"--app={url}", *window_flags()],
+                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                             start_new_session=True)
+            return
+        except (OSError, subprocess.SubprocessError):
+            pass
+    webbrowser.open(url)
+
+
 # ---------- pages ----------
-def find_browser():
-    for c in [os.environ.get("EXAM_FORGE_BROWSER"), S.get("browser")] + BROWSER_CANDIDATES:
+def find_browser(printing=True):
+    """The browser the user named, else a known one. Headless Brave never wrote the PDF
+    in testing, so it is only used for the Studio window unless named on purpose."""
+    settings = S or load_settings()
+    named = [os.environ.get("EXAM_FORGE_BROWSER"), settings.get("browser")]
+    known = [c for c in BROWSER_CANDIDATES if not (printing and "brave" in c.lower())]
+    for c in named + known:
         if not c:
             continue
         p = Path(c).expanduser()
@@ -444,8 +693,8 @@ def cmd_render_pages(a):
     first, last = int(m.group(1)), int(m.group(2) or m.group(1))
     target = Path(a.out).expanduser()
     target.mkdir(parents=True, exist_ok=True)
-    try:
-        import fitz  # optional pymupdf
+    fitz = load_fitz()
+    if fitz:
         doc = fitz.open(str(pdf))
         last = min(last, doc.page_count)
         for i in range(first, last + 1):
@@ -453,8 +702,6 @@ def cmd_render_pages(a):
             doc[i - 1].get_pixmap(dpi=a.dpi).save(str(path))
             print(path)
         return
-    except ImportError:
-        pass
     if shutil.which("pdftoppm"):
         r = subprocess.run(["pdftoppm", "-png", "-r", str(a.dpi), "-f", str(first), "-l", str(last),
                             str(pdf), str(target / f"{pdf.stem}-p")], capture_output=True, text=True)
@@ -463,8 +710,7 @@ def cmd_render_pages(a):
         for p in sorted(target.glob(f"{pdf.stem}-p*.png")):
             print(p)
         return
-    print("ERROR: no page image tool found. Install one: 'pip install pymupdf' or "
-          "'brew install poppler' (Linux: 'apt-get install poppler-utils').", file=sys.stderr)
+    print("ERROR: no page image tool found. Run: forge.py doctor --install pdf_tool", file=sys.stderr)
     sys.exit(4)
 
 
@@ -523,7 +769,28 @@ def plan_pdf(pdf: Path, pages: int):
     }
 
 
+def use_mix(mix, key="--mix"):
+    """Use a difficulty mix for this job instead of the setting."""
+    spec = next(x for x in load_schema()["settings"] if x["key"] == "difficulty_mix")
+    error = validate_value(spec, mix)
+    if error:
+        raise SettingsError(error.replace("difficulty_mix", key))
+    S["difficulty_mix"] = mix
+
+
+def parse_pairs(raw, flag):
+    try:
+        return dict(x.split("=", 1) for x in raw.split(","))
+    except ValueError:
+        fail(f"{flag} must look like editor=sonnet,reviewer=opus")
+
+
 def cmd_plan(a):
+    if a.mix:
+        try:
+            use_mix(parse_value(next(x for x in load_schema()["settings"] if x["key"] == "difficulty_mix"), a.mix))
+        except (SettingsError, ValueError) as e:
+            fail(str(e))
     manual = {}
     for s in a.pages or []:
         k, _, v = s.rpartition("=")
@@ -547,6 +814,17 @@ def cmd_plan(a):
     for stem in stems:
         (run / stem).mkdir(parents=True, exist_ok=True)
     team = resolve_team(S)
+    extra = {}
+    try:
+        if a.team:
+            team = clean_team(parse_pairs(a.team, "--team"))
+        if a.effort:
+            extra["effort"] = clean_effort(parse_pairs(a.effort, "--effort"))
+        if a.budget:
+            unit, _, amount = a.budget.partition("=")
+            extra["budget"] = clean_budget({"unit": unit, "amount": float(amount)})
+    except (SettingsError, ValueError) as e:
+        fail(str(e))
     result = {
         "created": dt.datetime.now().isoformat(timespec="minutes"),
         "run": str(run),
@@ -555,12 +833,14 @@ def cmd_plan(a):
         # or rasterize with render-pages.
         "read_pages_supported": bool(shutil.which("pdftoppm")),
         "team": team,
+        "difficulty_mix": S["difficulty_mix"],
+        **extra,
         "pdfs": plans,
     }
     text = json.dumps(result, ensure_ascii=False, indent=2)
     (run / "plan.json").write_text(text, encoding="utf-8")
     register_run(run)
-    emit(run, "plan", team=team, preset=S["quality_preset"],
+    emit(run, "plan", team=team, preset=S["quality_preset"], budget=extra.get("budget"),
          pdfs=[{"stem": p["stem"], "pages": p["pages"], "chunks": len(p["chunks"]),
                 "questions": max(p["question_options"])} for p in plans])
     print(text)
@@ -632,6 +912,11 @@ def cmd_check(a):
     page_range = None
     if data.get("page_start") and data.get("page_end"):
         page_range = (data["page_start"], data["page_end"])
+    run = find_run(a.json)
+    if run:  # a job can set its own mix; the thin-page rule below must follow it
+        mix = json.loads((run / "plan.json").read_text(encoding="utf-8")).get("difficulty_mix")
+        if mix:
+            use_mix(mix)
     errors = []
     ids = [q.get("id") for q in questions]
     if len(set(ids)) != len(ids):
@@ -930,7 +1215,7 @@ def format_date(iso, L):
     return L["date"].format(day=d.day, month=L["months"][d.month - 1], year=d.year)
 
 
-def build_book_html(book, placement):
+def build_book_html(book, placement, contents=True):
     L = LABELS.get(book.get("language"), LABELS["en"])
     parts = book["parts"]
     multi = len(parts) > 1
@@ -977,6 +1262,7 @@ def build_book_html(book, placement):
     count = {z: sum(1 for q in questions if q["difficulty"] == z) for z in DIFFICULTIES}
     bar = "".join(f'<span class="{z}" style="flex:{max(count[z], 0.001)}"></span>' for z in DIFFICULTIES)
     legend = "".join(f'<li><i class="{z}"></i>{L[z]} <b>{count[z]}</b></li>' for z in DIFFICULTIES)
+    guide = f'<p class="guide">{L[f"guide_{placement}"]}</p>'
     css = (TEMPLATES / "book.css").read_text(encoding="utf-8")
     page = (TEMPLATES / "book.html").read_text(encoding="utf-8")
     fills = {
@@ -985,8 +1271,10 @@ def build_book_html(book, placement):
         "FORMAT": L.get(f'fmt_{book.get("format")}', esc(book.get("format", ""))),
         "DATE": format_date(book.get("date", dt.date.today().isoformat()), L),
         "TOTAL": count_label(len(questions), L, "questions"), "SECTIONS": count_label(sec_no - 1, L, "sections"),
-        "MIX_LABEL": L["difficulty_mix"], "BAR": bar, "LEGEND": legend, "CONTENTS": L["contents"],
-        "TOC": "".join(toc), "GUIDE": L[f"guide_{placement}"], "BODY": "".join(body),
+        "MIX_LABEL": L["difficulty_mix"], "BAR": bar, "LEGEND": legend, "BODY": "".join(body),
+        "CONTENTS_PAGE": (f'<section class="contents"><h2>{L["contents"]}</h2><ol>{"".join(toc)}</ol>{guide}</section>'
+                          if contents else ""),
+        "COVER_GUIDE": "" if contents else guide,
     }
     for k, v in fills.items():
         page = page.replace("{{" + k + "}}", v)
@@ -1005,7 +1293,8 @@ def cmd_render(a):
     if errors:
         fail("pre-render check: " + "; ".join(errors[:10]))
     placement = a.answers or S["answer_placement"]
-    page, total, sections = build_book_html(book, placement)
+    contents = not a.no_contents and S["book_contents"] != "never"
+    page, total, sections = build_book_html(book, placement, contents)
     out = Path(a.out).expanduser().resolve()
     out.parent.mkdir(parents=True, exist_ok=True)
     if out.exists():
@@ -1028,10 +1317,18 @@ def cmd_render(a):
                   "Open it in a browser and print to PDF, or set EXAM_FORGE_BROWSER to a browser path.",
                   file=sys.stderr)
             sys.exit(3)
-        r = subprocess.run([browser, "--headless=new", "--disable-gpu", "--no-pdf-header-footer",
-                            f"--user-data-dir={td}/profile", "--no-first-run",
-                            f"--print-to-pdf={out}", h.as_uri()],
-                           capture_output=True, text=True, timeout=180)
+        try:
+            r = subprocess.run([browser, "--headless=new", "--disable-gpu", "--no-pdf-header-footer",
+                                f"--user-data-dir={td}/profile", "--no-first-run",
+                                f"--print-to-pdf={out}", h.as_uri()],
+                               capture_output=True, text=True, timeout=180)
+        except subprocess.TimeoutExpired:
+            fallback = out.with_suffix(".html")
+            shutil.copy(h, fallback)
+            emit(run, "render", questions=total, out=str(fallback), html_only=True)
+            print(f"ERROR: {Path(browser).name} did not finish printing. Book written as HTML: {fallback}",
+                  file=sys.stderr)
+            sys.exit(3)
     if not out.exists():
         fail(f"PDF was not produced: {r.stderr[-800:]}")
     emit(run, "render", questions=total, out=str(out))
@@ -1106,7 +1403,270 @@ def run_cost(run, pricing):
 
 
 def cmd_cost(a):
-    print(json.dumps(run_cost(Path(a.run).expanduser(), S["pricing"]), indent=2))
+    run = Path(a.run).expanduser()
+    cost = run_cost(run, S["pricing"])
+    if a.budget_check:
+        sys.exit(6 if budget_passed(run, cost) else 0)
+    if a.record:
+        record_calibration(run, cost)
+    print(json.dumps(cost, indent=2))
+
+
+# ---------- estimate ----------
+# Tokens per agent role, measured on a real 30-page, 40-question job at effort "high"
+# and including its rewrite rounds. Input scales with pages + questions, output with
+# questions. Every run recorded with `cost --record` corrects them for this user.
+COST_MODEL = {"editor": {"input": 17000, "output": 2200}, "screener": {"input": 8000, "output": 1400},
+              "reviewer": {"input": 17000, "output": 1850}}
+CACHE_READ_SHARE = 0.72  # of input tokens in that job; the rest were cache writes
+EFFORTS = ["low", "medium", "high", "xhigh", "max"]
+SCREENER_EFFORTS = ["low", "medium"]  # a proofreading pass gains nothing from more
+EFFORT_FACTOR = {"low": 0.6, "medium": 0.8, "high": 1.0, "xhigh": 1.3, "max": 1.7}  # assumed, not measured
+ESTIMATE_MARGIN = 0.35
+ROLES = ["editor", "screener", "reviewer", "chief_editor"]
+ROLE_RANK = {"editor": 3, "screener": 0.5, "reviewer": 4, "chief_editor": 2}
+MODEL_RANK = {"": 0, "haiku": 1, "sonnet": 3, "opus": 5}
+EFFORT_RANK = dict(zip(EFFORTS, [0, 1, 1.7, 2.1, 2.3]))  # each step adds less
+OPUS_ROLES = ("editor", "reviewer", "chief_editor")
+BUDGET_ALARM = 1.2
+
+
+def calibration_path():
+    return config_dir() / "calibration.json"
+
+
+def calibration():
+    try:
+        return json.loads(calibration_path().read_text(encoding="utf-8")).get("factor", {})
+    except (OSError, ValueError, AttributeError):
+        return {}
+
+
+def role_tokens(role, pages, questions, sample_rate, factor=None):
+    """Input and output tokens one role is expected to use on a job, at effort high."""
+    base = COST_MODEL["reviewer" if role == "chief_editor" else role]
+    share = sample_rate if role == "chief_editor" else 1
+    scale = share * (factor if factor is not None else 1)
+    return base["input"] * (pages + questions) * scale, base["output"] * questions * scale
+
+
+def role_cost(role, model, effort, tokens, pricing):
+    """(tokens, usd) for one role, or zeros when the role is off."""
+    if not model:
+        return 0, 0.0
+    price = pricing.get(model, {})
+    tokens_in, tokens_out = tokens[role]
+    in_rate = CACHE_READ_SHARE * price.get("cache_read", 0) + (1 - CACHE_READ_SHARE) * price.get("cache_write", 0)
+    spread = EFFORT_FACTOR[effort]
+    return ((tokens_in + tokens_out) * spread,
+            (tokens_in * in_rate + tokens_out * price.get("output", 0)) * spread / 1e6)
+
+
+def job_size(pdfs):
+    """Pages and questions of a job, from the same rules `plan` uses."""
+    pages = questions = 0
+    for p in pdfs:
+        pdf = Path(p).expanduser()
+        n = page_count(pdf)
+        if not n:
+            raise SettingsError(f"could not read the page count of {pdf.name}")
+        pages += n
+        questions += max(plan_pdf(pdf, n)["question_options"])
+    return pages, questions
+
+
+def estimate(tokens, team, effort, pricing):
+    roles = {r: role_cost(r, team.get(r, ""), effort.get(r, "high"), tokens, pricing) for r in ROLES}
+    used = sum(t for t, _ in roles.values())
+    usd = sum(u for _, u in roles.values())
+    return {"tokens": round(used), "usd": round(usd, 2), "usd_low": round(usd * (1 - ESTIMATE_MARGIN), 2),
+            "usd_high": round(usd * (1 + ESTIMATE_MARGIN), 2),
+            "by_role": {r: {"tokens": round(t), "usd": round(u, 2)} for r, (t, u) in roles.items()}}
+
+
+def quality(team, effort):
+    return sum(ROLE_RANK[r] * (MODEL_RANK[team[r]] + (EFFORT_RANK[effort[r]] if team[r] else 0)) for r in ROLES)
+
+
+def solve_budget(tokens, unit, amount, pricing, opus):
+    """The best team within the target. Reviewers stay on, at Sonnet or better."""
+    strong = ["sonnet", "opus"] if opus else ["sonnet"]
+    pick = {"editor": strong, "screener": ["", "haiku"], "reviewer": strong, "chief_editor": ["", *strong]}
+    levels = {r: SCREENER_EFFORTS if r == "screener" else EFFORTS for r in ROLES}
+    costs = {r: {(m, e): role_cost(r, m, e, tokens, pricing) for m in pick[r] for e in levels[r]} for r in ROLES}
+    metric = 0 if unit == "tokens" else 1
+    best = cheapest = None
+    for models in product(*(pick[r] for r in ROLES)):
+        team = dict(zip(ROLES, models))
+        for chosen in product(*(levels[r] for r in ROLES)):
+            effort = dict(zip(ROLES, chosen))
+            spent = sum(costs[r][(team[r], effort[r])][metric] for r in ROLES)
+            rank = quality(team, effort)
+            if cheapest is None or spent < cheapest[0]:
+                cheapest = (spent, team, effort)
+            if spent <= amount and (best is None or (rank, spent) > best[0]):
+                best = ((rank, spent), team, effort)
+    if best:
+        return {"team": best[1], "effort": best[2], "reachable": True, "minimum": cheapest[0]}
+    return {"team": cheapest[1], "effort": cheapest[2], "reachable": False, "minimum": cheapest[0]}
+
+
+def plan_estimate(body, settings):
+    """What the job form shows. With a budget, also the team that fits it."""
+    global S
+    S = settings
+    pdfs = body.get("pdfs")
+    if not isinstance(pdfs, list) or not pdfs:
+        raise SettingsError("choose at least one PDF")
+    pages, questions = job_size(pdfs)
+    factors = calibration()
+    tokens = {r: role_tokens(r, pages, questions, settings["chief_sample_rate"], factors.get(r)) for r in ROLES}
+    pricing = settings["pricing"]
+    team, effort = clean_team(body.get("team")), clean_effort(body.get("effort"))
+    out = {"ok": True, "pages": pages, "questions": questions}
+    budget = clean_budget(body.get("budget"))
+    if budget:
+        fit = solve_budget(tokens, budget["unit"], budget["amount"], pricing, model_access().get("opus") is True)
+        team, effort = fit["team"], fit["effort"]
+        out.update(team=team, effort=effort, reachable=fit["reachable"], minimum=fit["minimum"])
+    out["estimate"] = estimate(tokens, team, effort, pricing)
+    return out
+
+
+def clean_team(team):
+    if not isinstance(team, dict) or set(team) != set(ROLES):
+        raise SettingsError("team must name every role")
+    if any(team[r] not in MODEL_RANK for r in ROLES):
+        raise SettingsError("unknown model in team")
+    if not team["editor"] or not team["reviewer"]:
+        raise SettingsError("the editor and reviewer cannot be off")
+    return team
+
+
+def clean_effort(effort):
+    if not isinstance(effort, dict) or set(effort) != set(ROLES) or any(effort[r] not in EFFORTS for r in ROLES):
+        raise SettingsError(f"effort must give every role one of {EFFORTS}")
+    return effort
+
+
+def clean_budget(budget):
+    if budget is None:
+        return None
+    amount = budget.get("amount") if isinstance(budget, dict) else None
+    if not isinstance(budget, dict) or budget.get("unit") not in ("usd", "tokens") \
+            or isinstance(amount, bool) or not isinstance(amount, (int, float)) or amount <= 0:
+        raise SettingsError("budget needs a unit (usd or tokens) and a positive amount")
+    return {"unit": budget["unit"], "amount": amount}
+
+
+def default_team(settings):
+    """Where the job form starts. The chief editor gets the best model this account has."""
+    access = model_access().get("opus")
+    team = dict(PRESETS[settings["quality_preset"]])
+    team["chief_editor"] = "opus"
+    for role, model in settings["models"].items():
+        if model:
+            team[role] = model
+    if not settings["screener_enabled"]:
+        team["screener"] = ""
+    if access is not True:
+        team = {r: "sonnet" if m == "opus" else m for r, m in team.items()}
+    return {"team": team, "effort": {r: "low" if r == "screener" else "high" for r in ROLES}, "opus": access}
+
+
+def models_path():
+    return config_dir() / "models.json"
+
+
+def model_access():
+    try:
+        data = json.loads(models_path().read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def probe_opus():
+    """Ask Claude Code for one word from Opus. True, False, or None when unclear."""
+    claude = shutil.which("claude")
+    if not claude:
+        return None
+    try:
+        r = subprocess.run([claude, "-p", "Reply with: ok", "--model", "opus", "--output-format", "json",
+                            "--no-session-persistence", "--disable-slash-commands", "--strict-mcp-config", "--tools", ""],
+                           capture_output=True, text=True, timeout=90, stdin=subprocess.DEVNULL, cwd=tempfile.gettempdir())
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    try:
+        answer = json.loads(r.stdout)
+    except ValueError:
+        answer = {}
+    if r.returncode == 0 and answer.get("is_error") is False:
+        return True
+    text = f"{answer.get('result', '')} {r.stderr}".lower()
+    denied = ("not available", "not_found", "not found", "access", "upgrade", "does not support", "isn't available")
+    return False if "model" in text and any(w in text for w in denied) else None
+
+
+def cmd_models(a):
+    if a.probe:
+        result = probe_opus()
+        models_path().parent.mkdir(parents=True, exist_ok=True)
+        write_atomic(models_path(), {"opus": result, "t": now_iso()})
+    print(json.dumps(model_access()))
+
+
+def probe_in_background():
+    """The answer rarely changes: look again after 30 days, or after 1 when it was unclear."""
+    known = model_access()
+    try:
+        age = (dt.datetime.now() - dt.datetime.fromisoformat(known["t"])).days
+    except (KeyError, TypeError, ValueError):
+        age = 999
+    if age < (30 if known.get("opus") is not None else 1):
+        return
+    subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "models", "--probe"], stdin=subprocess.DEVNULL,
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+
+
+def read_plan(run):
+    try:
+        return json.loads((Path(run) / "plan.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def budget_passed(run, cost):
+    """True once, when a job with a target has used 120% of it."""
+    budget, mark = read_plan(run).get("budget"), Path(run) / "budget-alarm"
+    if not budget or not cost or mark.exists():
+        return False
+    total = cost["total"]
+    spent = total["usd"] if budget["unit"] == "usd" else sum(total[k] for k in ("input", "output", "cache_read", "cache_write"))
+    if spent < budget["amount"] * BUDGET_ALARM:
+        return False
+    mark.touch()
+    return True
+
+
+def record_calibration(run, cost):
+    """Move each role's correction a third of the way to what this run really used."""
+    mark, plan = Path(run) / "calibrated", read_plan(run)
+    if mark.exists() or not cost or not plan.get("pdfs"):
+        return
+    pages = sum(p["pages"] for p in plan["pdfs"])
+    questions = sum(max(p["question_options"]) for p in plan["pdfs"])
+    factors, effort = calibration(), plan.get("effort", {})
+    for role in ROLES:
+        seen = cost["by_role"].get(role.replace("_", "-"))
+        tokens = role_tokens(role, pages, questions, S["chief_sample_rate"])
+        expected = sum(tokens) * EFFORT_FACTOR[effort.get(role, "high")]
+        if seen and expected:
+            ratio = min(3.0, max(0.3, (seen["input"] + seen["output"]) / expected))
+            factors[role] = round(factors.get(role, 1.0) * 2 / 3 + ratio / 3, 3)
+    calibration_path().parent.mkdir(parents=True, exist_ok=True)
+    write_atomic(calibration_path(), {"factor": factors, "t": now_iso()})
+    mark.touch()
 
 
 def cmd_studio(a):
@@ -1115,11 +1675,325 @@ def cmd_studio(a):
     server.main(port=a.port or S["studio_port"], open_browser=not a.no_open)
 
 
+# ---------- job form ----------
+# The Studio cannot run agents. A Claude Code session waits here, the browser hands
+# it a job through these files, and everything after that runs as usual.
+FRESH_SECONDS = 10
+MAX_FOLDER_PDFS = 200
+ASK_POLL_SECONDS = 1
+
+
+def intake_dir():
+    return config_dir() / "intake"
+
+
+def write_atomic(path, data):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def is_fresh(path):
+    try:
+        return time.time() - path.stat().st_mtime < FRESH_SECONDS
+    except OSError:
+        return False
+
+
+def read_quiet(path):
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def remove_quiet(path):
+    try:
+        path.unlink()
+    except OSError:
+        pass
+
+
+def session_waiting():
+    return is_fresh(intake_dir() / "waiter.json")
+
+
+def intake_request():
+    return read_quiet(intake_dir() / "request.json")
+
+
+def validate_pdf(raw):
+    """Absolute path of a real PDF file, or a SettingsError naming what is wrong."""
+    if not isinstance(raw, str) or not raw.strip():
+        raise SettingsError("empty PDF path")
+    pdf = Path(raw.strip()).expanduser().resolve()
+    if not pdf.is_file():
+        raise SettingsError(f"file not found: {pdf}")
+    with open(pdf, "rb") as f:
+        if f.read(5) != b"%PDF-":
+            raise SettingsError(f"not a PDF: {pdf.name}")
+    return str(pdf)
+
+
+def pdfs_under(folder):
+    """PDFs in a folder and its subfolders, skipping hidden entries."""
+    found = []
+    for base, dirs, files in os.walk(folder):
+        dirs[:] = sorted(d for d in dirs if not d.startswith("."))
+        found += [Path(base) / f for f in sorted(files)
+                  if f.lower().endswith(".pdf") and not f.startswith(".")]
+        if len(found) > MAX_FOLDER_PDFS:
+            raise SettingsError(f"more than {MAX_FOLDER_PDFS} PDFs in {folder.name}; choose a smaller folder")
+    return found
+
+
+def expand_sources(paths):
+    """Files and folders the user chose, as a flat list of PDF paths."""
+    out = []
+    for raw in paths:
+        p = Path(str(raw).strip()).expanduser().resolve()
+        if p.is_dir():
+            inside = pdfs_under(p)
+            if not inside:
+                raise SettingsError(f"no PDFs in {p.name}")
+            out += [validate_pdf(str(f)) for f in inside]
+        else:
+            out.append(validate_pdf(str(p)))
+    return list(dict.fromkeys(out))
+
+
+def list_folder(raw):
+    """Folders and PDFs for the Studio's file browser. Other files stay out of it."""
+    p = Path(str(raw or "~").strip() or "~").expanduser().resolve()
+    file = None
+    if p.is_file():
+        file, p = validate_pdf(str(p)), p.parent
+    if not p.is_dir():
+        raise SettingsError(f"folder not found: {p}")
+    try:
+        names = [e for e in os.scandir(p) if not e.name.startswith(".")]
+    except OSError as e:
+        raise SettingsError(f"cannot open {p}: {e.strerror}")
+    entries = []
+    for e in names:
+        try:
+            is_dir = e.is_dir()
+        except OSError:
+            continue
+        if is_dir or e.name.lower().endswith(".pdf"):
+            entries.append({"name": e.name, "path": e.path, "dir": is_dir})
+    entries.sort(key=lambda e: (not e["dir"], e["name"].lower()))
+    return {"path": str(p), "parent": str(p.parent) if p.parent != p else None, "entries": entries, "file": file}
+
+
+def places():
+    home = Path.home()
+    spots = [("home", home), ("desktop", home / "Desktop"), ("documents", home / "Documents"),
+             ("downloads", home / "Downloads"), ("volumes", Path("/Volumes"))]
+    return [{"key": k, "path": str(p)} for k, p in spots if p.is_dir()]
+
+
+def upload_target(batch, name):
+    """Where a dropped PDF goes. A browser hides its real path, so it needs a copy."""
+    if not re.fullmatch(r"[0-9]{1,20}", batch or ""):
+        raise SettingsError("bad upload batch")
+    clean = re.sub(r'[\x00-\x1f/\\:*?"<>|]', "_", Path(str(name).replace("\\", "/")).name).strip()
+    if clean.startswith(".") or not clean.lower().endswith(".pdf"):
+        raise SettingsError(f"not a PDF: {clean}")
+    folder = Path.home() / "Exam Forge" / batch
+    folder.mkdir(parents=True, exist_ok=True)
+    target, n = folder / clean, 1
+    while target.exists():
+        n += 1
+        target = folder / f"{Path(clean).stem}-{n}.pdf"
+    return target
+
+
+def validate_job(body, settings):
+    """Clean a job from the form. Only known fields survive."""
+    if not isinstance(body, dict):
+        raise SettingsError("job must be an object")
+    raw = body.get("pdfs")
+    if not isinstance(raw, list) or not raw:
+        raise SettingsError("choose at least one PDF")
+    pdfs = [validate_pdf(p) for p in raw]
+    if len(set(pdfs)) != len(pdfs):
+        raise SettingsError("the same PDF was added twice")
+    stems = [Path(p).stem for p in pdfs]
+    if len(set(stems)) != len(stems):
+        raise SettingsError("two PDFs share a name; their output would collide")
+    if body.get("format") not in FORMATS:
+        raise SettingsError(f"unknown format: {body.get('format')}")
+    if body.get("mcq_options") not in (4, 5):
+        raise SettingsError("options per question must be 4 or 5")
+    if body.get("answer_placement") not in ("book_end", "inline", "section_end"):
+        raise SettingsError(f"unknown answer placement: {body.get('answer_placement')}")
+    merge = None
+    if len(pdfs) > 1:
+        fixed = {"always": True, "never": False}.get(settings["merge_books"])
+        merge = bool(body.get("merge")) if fixed is None else fixed
+    notes, field = body.get("notes", ""), body.get("field", "")
+    if not isinstance(notes, str) or len(notes) > 4000:
+        raise SettingsError("notes must be text of at most 4000 characters")
+    if not isinstance(field, str) or len(field) > 100:
+        raise SettingsError("field must be text of at most 100 characters")
+    mix = body.get("difficulty_mix", settings["difficulty_mix"])
+    error = validate_value(next(x for x in load_schema()["settings"] if x["key"] == "difficulty_mix"), mix)
+    if error:
+        raise SettingsError(error)
+    contents = {"always": True, "never": False}.get(settings["book_contents"], body.get("contents", True) is not False)
+    base = default_team(settings)
+    team = clean_team(body.get("team", base["team"]))
+    effort = clean_effort(body.get("effort", base["effort"]))
+    return {"pdfs": pdfs, "format": body["format"], "mcq_options": body["mcq_options"],
+            "answer_placement": body["answer_placement"], "merge": merge,
+            "notes": notes.strip(), "field": field.strip(), "difficulty_mix": mix, "contents": contents,
+            "team": team, "effort": effort, "budget": clean_budget(body.get("budget"))}
+
+
+def submit_job(job):
+    write_atomic(intake_dir() / "job.json", job)
+
+
+def cancel_job():
+    write_atomic(intake_dir() / "cancel.json", {"t": now_iso()})
+
+
+def ensure_studio():
+    """URL of a running Studio, starting one in the background when needed."""
+    sys.path.insert(0, str(ROOT / "studio"))
+    import server
+    port = server.find_studio(S["studio_port"])
+    if port:
+        return f"http://127.0.0.1:{port}"
+    log = config_dir() / "studio.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    with open(log, "w", encoding="utf-8") as out:
+        subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "studio", "--no-open"],
+                         stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT,
+                         start_new_session=True)
+    for _ in range(50):
+        time.sleep(0.1)
+        m = re.search(r"http://127\.0\.0\.1:(\d+)", log.read_text(encoding="utf-8"))
+        if m and server.is_studio(int(m.group(1))):
+            return m.group(0)
+    fail(f"Studio did not start; see {log}")
+
+
+def page_open(base):
+    """True when a Studio page is already polling; it shows the new request by itself."""
+    try:
+        with urllib.request.urlopen(base + "/api/ping", timeout=2) as r:
+            return bool(json.load(r).get("watching"))
+    except (OSError, ValueError):
+        return False
+
+
+def intake_open(a):
+    box = intake_dir()
+    for name in ("job.json", "cancel.json"):
+        remove_quiet(box / name)
+    try:
+        pdfs = expand_sources(a.pdf or [])
+    except SettingsError as e:
+        fail(str(e))
+    write_atomic(box / "request.json", {"id": os.urandom(6).hex(), "t": now_iso(), "pdfs": pdfs,
+                                        "notes": a.notes or ""})
+    probe_in_background()
+    base = ensure_studio()
+    url = base + "/?tab=job"
+    if S["studio_auto_open"] and not a.no_open and not page_open(base):
+        open_window(url)
+    print(json.dumps({"url": url}))
+
+
+def intake_wait(a):
+    box = intake_dir()
+    waiter, job_file, cancel = box / "waiter.json", box / "job.json", box / "cancel.json"
+    deadline = time.time() + a.timeout
+    try:
+        while time.time() < deadline:
+            write_atomic(waiter, {"pid": os.getpid()})
+            if cancel.exists():
+                remove_quiet(cancel)
+                print('{"cancelled": true}')
+                sys.exit(5)
+            claimed = box / f".claimed.{os.getpid()}"
+            try:
+                os.replace(job_file, claimed)
+            except OSError:
+                time.sleep(ASK_POLL_SECONDS)
+                continue
+            print(claimed.read_text(encoding="utf-8"))
+            remove_quiet(claimed)
+            remove_quiet(box / "request.json")
+            return
+    finally:
+        remove_quiet(waiter)
+    print('{"timeout": true}')
+    sys.exit(4)
+
+
+def cmd_intake(a):
+    (intake_open if a.action == "open" else intake_wait)(a)
+
+
+def pending_ask(run):
+    """The open question of a run, if the session is still waiting for its answer."""
+    p = Path(run) / "ask.json"
+    return read_quiet(p) if is_fresh(p) else None
+
+
+def answer_ask(run, ask_id, value):
+    ask = pending_ask(run)
+    if not ask or ask["id"] != ask_id:
+        raise SettingsError("this question is no longer open")
+    if value not in [o["value"] for o in ask["options"]]:
+        raise SettingsError(f"unknown answer: {value}")
+    write_atomic(Path(run) / "answer.json", {"id": ask_id, "value": value})
+
+
+def cmd_ask(a):
+    """Ask the person watching the Studio a question and print the chosen value."""
+    run = Path(a.run).expanduser().resolve()
+    if not (run / "plan.json").is_file():
+        fail(f"not a run folder: {run}")
+    options = []
+    for raw in a.option:
+        value, sep, label = raw.partition("=")
+        if not (sep and value and label):
+            fail(f"option must look like value=Label: {raw}")
+        options.append({"value": value, "label": label})
+    ask_file, answer_file = run / "ask.json", run / "answer.json"
+    remove_quiet(answer_file)
+    write_atomic(ask_file, {"id": a.id, "text": a.text, "options": options})
+    emit(run, "ask", text=a.text)
+    deadline = time.time() + a.timeout
+    try:
+        while time.time() < deadline:
+            os.utime(ask_file)
+            answer = read_quiet(answer_file)
+            if answer and answer.get("id") == a.id:
+                emit(run, "answer", value=answer["value"])
+                print(answer["value"])
+                return
+            time.sleep(ASK_POLL_SECONDS)
+    finally:
+        remove_quiet(ask_file)
+        remove_quiet(answer_file)
+    print("timeout", file=sys.stderr)
+    sys.exit(4)
+
+
 # ---------- cli ----------
 def main():
     global S
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
+    p = sub.add_parser("doctor"); p.add_argument("--json", action="store_true"); p.add_argument("--install")
+    p.set_defaults(f=cmd_doctor)
+    p = sub.add_parser("studio-url"); p.set_defaults(f=lambda a: print(ensure_studio() + "/?tab=job"))
     p = sub.add_parser("settings")
     p.set_defaults(f=lambda a: print(json.dumps(S, ensure_ascii=False, indent=2)))
     p = sub.add_parser("config")
@@ -1135,6 +2009,7 @@ def main():
     p.add_argument("--out", required=True); p.add_argument("--dpi", type=int, default=110)
     p.set_defaults(f=cmd_render_pages)
     p = sub.add_parser("plan"); p.add_argument("pdfs", nargs="+"); p.add_argument("--run")
+    p.add_argument("--mix"); p.add_argument("--team"); p.add_argument("--effort"); p.add_argument("--budget")
     p.add_argument("--pages", action="append"); p.set_defaults(f=cmd_plan)
     p = sub.add_parser("check"); p.add_argument("json"); p.add_argument("--format", choices=list(FORMATS))
     p.add_argument("--expected", help="easy=2,medium=5,hard=3; separate alternatives with '|'")
@@ -1155,13 +2030,23 @@ def main():
     p.add_argument("--language", default="en", help="label language of the book (en or tr)")
     p.add_argument("--titles", choices=["logical", "filename"]); p.set_defaults(f=cmd_merge)
     p = sub.add_parser("render"); p.add_argument("json"); p.add_argument("out")
+    p.add_argument("--no-contents", action="store_true")
     p.add_argument("--answers", choices=["book_end", "inline", "section_end"])
     p.add_argument("--html", help="also copy the intermediate HTML here"); p.set_defaults(f=cmd_render)
     p = sub.add_parser("event"); p.add_argument("run"); p.add_argument("type"); p.add_argument("data", nargs="*")
     p.set_defaults(f=cmd_event)
-    p = sub.add_parser("cost"); p.add_argument("run"); p.set_defaults(f=cmd_cost)
+    p = sub.add_parser("cost"); p.add_argument("run"); p.add_argument("--record", action="store_true")
+    p.add_argument("--budget-check", action="store_true"); p.set_defaults(f=cmd_cost)
+    p = sub.add_parser("models"); p.add_argument("--probe", action="store_true"); p.set_defaults(f=cmd_models)
     p = sub.add_parser("studio"); p.add_argument("--port", type=int); p.add_argument("--no-open", action="store_true")
     p.set_defaults(f=cmd_studio)
+    p = sub.add_parser("intake"); p.add_argument("action", choices=["open", "wait"])
+    p.add_argument("--pdf", action="append"); p.add_argument("--notes")
+    p.add_argument("--no-open", action="store_true"); p.add_argument("--timeout", type=int, default=7200)
+    p.set_defaults(f=cmd_intake)
+    p = sub.add_parser("ask"); p.add_argument("run"); p.add_argument("--id", required=True)
+    p.add_argument("--text", required=True); p.add_argument("--option", action="append", required=True)
+    p.add_argument("--timeout", type=int, default=7200); p.set_defaults(f=cmd_ask)
     a = ap.parse_args()
     try:
         S = load_settings()

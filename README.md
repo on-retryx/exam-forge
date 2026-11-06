@@ -24,6 +24,8 @@ AI can write exam questions quickly. The hard part is trusting them. A model can
 
 You need Claude Code, Python 3.9+, and Chrome, Chromium or Edge to print the PDF. Without a browser, the book comes out as HTML that you can print from any browser.
 
+On each run Exam Forge checks these and the PDF page tool, and offers to install what is missing. `forge.py doctor` shows the same list. Nothing is installed without your approval, and pymupdf goes into its own folder, `~/.config/exam-forge/venv`.
+
 In Claude Code:
 
 ```
@@ -49,7 +51,19 @@ Or call it directly:
 /exam-forge:exam-forge ~/Courses/week3.pdf ~/Courses/week4.pdf
 ```
 
-Exam Forge asks for the format, where answers should go and, for several PDFs, whether to merge them. The book lands next to your PDF as `<name>-questions.pdf`.
+The Studio opens on a **New job** form. Press **Add** to browse your computer and pick files or whole folders, or drop them onto the form. A folder adds every PDF inside it, and you can remove any you do not want. Then choose the format, where answers should go and, for several PDFs, whether to merge them, then press **Start job**. Everything after that happens in the browser: you watch the team, answer any decision it needs, and open the finished book. PDFs and notes you gave the command are already filled in.
+
+The command works from a terminal too:
+
+```
+claude "/exam-forge:exam-forge"
+```
+
+Files you add by browsing stay where they are and the book lands next to them. A browser hides the real location of dropped files, so those are copied to `~/Exam Forge/` and the book lands there.
+
+The form needs that Claude Code session to stay open, because the session does the work; the Studio only hands it the job. When a job ends, the session waits for the next one, so you can keep going from the form. To answer in the chat instead, set `studio_job_form` to `false`.
+
+The book lands next to your PDF as `<name>-questions.pdf`.
 
 Try it with [`examples/water-cycle.pdf`](examples/water-cycle.pdf). [`examples/water-cycle-questions.pdf`](examples/water-cycle-questions.pdf) is a real output: one merged book from that note and its Turkish twin, 20 questions, with 7 of them rewritten after review.
 
@@ -113,13 +127,15 @@ Long PDFs can use a real share of a Claude Pro session. `/exam-forge:exam-forge`
 
 ## Studio
 
-The Studio opens in your browser when a job starts. It is a pixel-art office drawn entirely in code, including its own font, with no image files, downloads or external services, and it runs only on your computer.
+The Studio opens in a window of its own when a job starts, with a start screen that checks your setup. Without a Chromium browser it opens as a tab (`studio_window` = `false` does the same). On a Mac it is a small Exam Forge app in `~/Applications` with its own pixel-art icon in the Dock. Keep it in the Dock to open the Studio with a click. It is a pixel-art office drawn entirely in code, including its own font, with no image files, downloads or external services, and it runs only on your computer.
 
 - The team grows with the job: hopping pixel bots in different shapes for each editor and reviewer, a screener, and a crowned chief editor in a glass office, all at desks with their own PCs
 - Bots carry pages between desks, PASS and FAIL stamps appear, and speech bubbles show what each bot is doing (`studio_speech_bubbles` turns them off)
 - Click the chief editor's computer, or any bot, to open the team console: every agent, its current task, model and recent activity. Move through agents with the arrow keys, or show one in the office.
 - Live progress, reasons for rejection, estimated cost, past jobs and every setting
 - English and Turkish, day and night themes. With no job running, it plays a demo.
+
+In the job form you can name a cost target in USD or tokens and get the best team for it, or pick each role's model and effort and watch the estimate change. The estimate is a range: it starts from one measured job and adjusts to your own jobs over time. A target is not a hard limit, because the number of rewrite rounds can't be known in advance; if spending passes 120% of it, the Studio asks whether to go on. USD figures use API list prices, so on a subscription they are only a comparison.
 
 It never shows question text. Open it any time with `/exam-forge:studio`. To stop it opening by itself: `studio_auto_open` = `false`.
 
@@ -156,6 +172,7 @@ They are stored in `~/.config/exam-forge/settings.json`.
 | `topic_change_round` / `max_rounds` | 4 / 6 | When a stuck question changes topic, and when you are asked |
 | `split_threshold` / `chunk_pages` | 25 / 20 | PDFs longer than this split into chunks of this size |
 | `studio_auto_open` / `studio_port` | true / 8765 | Studio behavior |
+| `studio_job_form` | true | Start jobs from the Studio form instead of the chat |
 | `studio_speech_bubbles` | true | Bots show their current task in the Studio |
 | `browser` | empty | Browser path for printing (or `EXAM_FORGE_BROWSER`) |
 | `pricing` | see file | USD per million tokens, used only for estimates |
@@ -163,6 +180,7 @@ They are stored in `~/.config/exam-forge/settings.json`.
 ## Privacy and copyright
 
 - Exam Forge reads only the files you give it. It does not search the web or use other sources.
+- The Studio's file browser runs only on this computer and shows only folders and PDF names. It opens a file only when you add it. Dropped files are copied to `~/Exam Forge/`; delete them whenever you like.
 - Your questions stay yours. The run folder sits next to your book, and nothing is copied elsewhere. Your PDFs are processed by Claude as usual in Claude Code.
 - Use only material you have the right to use. Questions include short quotes from the source.
 - The review catches most errors, but it is still AI. Use the book to study. Have a person check it before using it as an official exam.
@@ -183,4 +201,4 @@ claude --plugin-dir .
 
 ## Türkçe özet
 
-**Exam Forge**, ders notu PDF'lerinden yazdırılabilir soru kitabı üreten bir Claude Code eklentisidir. Her soru kaynak sayfa ve birebir alıntı taşır. Ayrı bir reviewer sayfaları kendisi açıp denetler, doğrulanmamış soru kitaba giremez. Sorular PDF'in dilinde yazılır; Türkçe kaynak Türkçe soru verir. Kitap etiketleri ve Studio arayüzü Türkçe de kullanılabilir. Cevaplar kitabın sonuna, sorunun altına ya da bölüm sonuna konabilir. Birden çok PDF tek kitapta birleştirilebilir. Tüm ayarlar Studio'dan ya da `/exam-forge:config` ile değişir. Kurulum: `/plugin install exam-forge --marketplace on-retryx/exam-forge`.
+**Exam Forge**, ders notu PDF'lerinden yazdırılabilir soru kitabı üreten bir Claude Code eklentisidir. Her soru kaynak sayfa ve birebir alıntı taşır. Ayrı bir reviewer sayfaları kendisi açıp denetler, doğrulanmamış soru kitaba giremez. Sorular PDF'in dilinde yazılır; Türkçe kaynak Türkçe soru verir. Kitap etiketleri ve Studio arayüzü Türkçe de kullanılabilir. Cevaplar kitabın sonuna, sorunun altına ya da bölüm sonuna konabilir. Birden çok PDF tek kitapta birleştirilebilir. `/exam-forge:exam-forge` Studio'da bir iş formu açar; dosya ya da klasör ekleme (gezinerek veya sürükle bırakla), ayarlar ve işin takibi tarayıcıdan yapılır, Claude Code oturumu ise açık kalır. Tüm ayarlar Studio'dan ya da `/exam-forge:config` ile değişir. Kurulum: `/plugin install exam-forge --marketplace on-retryx/exam-forge`.
