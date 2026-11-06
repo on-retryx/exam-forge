@@ -1,8 +1,36 @@
-# Exam Forge
+<p align="center">
+  <img src="docs/icon.png" width="112" alt="Exam Forge icon">
+</p>
 
-Turn lecture notes into a printable question book, where **every question comes from your source** and **passes an independent review** before it gets in. Exam Forge is a [Claude Code](https://claude.com/claude-code) plugin, and you can watch its editorial team work in a small pixel-art office.
+<h1 align="center">Exam Forge</h1>
 
-![Exam Forge Studio](docs/studio.png)
+<p align="center">
+  <strong>Turn lecture notes into a printable question book.<br>
+  Every question comes from your source, and an independent review has to pass it.</strong>
+</p>
+
+<p align="center">
+  <a href="https://github.com/on-retryx/exam-forge/releases/latest"><img src="https://img.shields.io/github/v/release/on-retryx/exam-forge?color=f6c667&label=release" alt="Latest release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/on-retryx/exam-forge?color=4f8cf0" alt="MIT license"></a>
+  <img src="https://img.shields.io/badge/Claude%20Code-plugin-e8785a" alt="Claude Code plugin">
+  <img src="https://img.shields.io/badge/languages-any%20source%20language-59c97a" alt="Works with any source language">
+</p>
+
+<p align="center">
+  <a href="#install">Install</a> ·
+  <a href="#use">Use</a> ·
+  <a href="#how-it-works">How it works</a> ·
+  <a href="#studio">Studio</a> ·
+  <a href="examples/water-cycle-questions.pdf">Sample book (PDF)</a> ·
+  <a href="#t%C3%BCrk%C3%A7e-%C3%B6zet">Türkçe</a>
+</p>
+
+Exam Forge is a [Claude Code](https://claude.com/claude-code) plugin. A team of Claude agents writes, screens, verifies and rewrites questions from your PDFs, and you can watch them work in a small pixel-art office.
+
+<p align="center">
+  <img src="docs/office.gif" alt="Animated Studio office: pixel bots write, screen and review questions at their desks" width="820">
+</p>
+<p align="center"><sub>The Studio's demo run, sped up.</sub></p>
 
 ## Why
 
@@ -19,6 +47,14 @@ AI can write exam questions quickly. The hard part is trusting them. A model can
 - **Several PDFs:** one book per PDF, or a single merged book with a cover for each part, named after the file or with a logical title
 - **Any language:** questions follow the language of your PDF. Book labels come in English and Turkish.
 - **A live Studio:** a local animated office with the team at their desks, progress, reasons for rejections and estimated cost
+
+### The book
+
+A cover, an optional contents page, a cover for each part, questions grouped by section and an answer key with explanations. These pages come from [`examples/water-cycle-questions.pdf`](examples/water-cycle-questions.pdf), a real output.
+
+<p align="center">
+  <img src="docs/book.png" alt="Four pages of a sample question book: cover, part cover, questions and answer key" width="880">
+</p>
 
 ## Install
 
@@ -80,33 +116,105 @@ Try it with [`examples/water-cycle.pdf`](examples/water-cycle.pdf). [`examples/w
 
 ## How it works
 
-```
-PDFs ─► Plan ─► Editors (parallel, one per chunk)
-                   │
-                   ▼
-           Mechanical check (forge.py)
-                   │
-                   ▼
-           Screener (Haiku, no PDF) ──── fail ──► Rewrite ─┐
-                   │ pass                                  │
-                   ▼                                       │
-           Reviewer (opens the pages) ── fail ──► Rewrite ─┤
-                   │ pass                                  │
-                   ▼                                       │
-           Chief editor (balanced preset) ─ fail ► Rewrite ─┘
-                   │ pass
-                   ▼
-           Merge ─► PDF book
+Your Claude session is the orchestrator. It never writes or reviews a question. It splits the PDFs into chunks, starts one editor per chunk in parallel, and moves each chunk through the checks as soon as it is ready.
+
+### Meet the team
+
+| | Role | Default model | Job |
+|---|---|---|---|
+| <img src="docs/team/editor.png" width="64" alt=""> | **Editor** | Sonnet | Reads only its pages and writes the questions |
+| <img src="docs/team/screener.png" width="64" alt=""> | **Screener** | Haiku | Catches defects visible in the text, before any costly review. Never opens the PDF. |
+| <img src="docs/team/reviewer.png" width="64" alt=""> | **Reviewer** | Opus | Opens the pages and proves each question against the source. Only this step can verify a question. |
+| <img src="docs/team/chief-editor.png" width="64" alt=""> | **Chief editor** | Opus, `balanced` only | Re-checks hard and rewritten questions plus a sample of the rest |
+| | Orchestrator | your session | Splits the work, runs the team, manages the queue |
+| | `forge.py` | no model | Plan, mechanical checks, approvals, merging, printing. Python standard library only. |
+
+### From PDF to book
+
+```mermaid
+flowchart TD
+    pdf([Your PDFs]) --> plan[Plan: split into chunks]
+    plan --> editors[Editors write in parallel<br/>one per chunk]
+    editors --> check{{Mechanical check<br/>forge.py}}
+    check -- errors --> editors
+    check -- ok --> screen[Screener<br/>reads the text, no PDF]
+    screen -- pass --> review[Reviewer<br/>opens the source pages]
+    review -- pass --> chief[Chief editor<br/>balanced preset only]
+    chief -- pass --> merge{{Merge and print<br/>forge.py}}
+    merge --> book([PDF book])
+    screen -- fail --> fix[Editor rewrites<br/>only the rejected questions]
+    review -- fail --> fix
+    chief -- fail --> fix
+    fix --> screen
+
+    classDef file fill:#f6c667,stroke:#b8862b,color:#1a1d2e
+    classDef agent fill:#4f8cf0,stroke:#2a5db0,color:#ffffff
+    classDef gate fill:#59c97a,stroke:#2f8a4c,color:#10231a
+    classDef tool fill:#2a2f4a,stroke:#6c7196,color:#ffffff
+    classDef redo fill:#e5534b,stroke:#a8322c,color:#ffffff
+    class pdf,book file
+    class editors agent
+    class screen,review,chief gate
+    class plan,check,merge tool
+    class fix redo
 ```
 
-| Role | Default model | Job |
-|---|---|---|
-| Orchestrator | your session | Splits the work, runs the team, manages the queue |
-| Editor | Sonnet | Reads only its pages and writes the questions |
-| Screener | Haiku | Catches defects visible in the text, before any costly review |
-| Reviewer | Opus | Opens the pages and proves each question against the source. Only this step can verify a question. |
-| Chief editor | Opus, `balanced` only | Re-checks hard and rewritten questions plus a sample of the rest |
-| `forge.py` | no model | Plan, mechanical checks, approvals, merging, printing. Python standard library only. |
+The rule is enforced by the tool, not by goodwill: `forge.py` only merges questions that carry a passing review, so an unverified question cannot reach the book.
+
+### One chunk, step by step
+
+Chunks do not wait for each other. A rejected question costs little, because a rewrite goes back with only the pages it needs.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant O as Orchestrator
+    participant E as Editor
+    participant F as forge.py
+    participant S as Screener
+    participant R as Reviewer
+    O->>E: Write questions from pages 1 to 12
+    E-->>O: Questions with page and quote
+    O->>F: check
+    F-->>O: Format and difficulty mix are fine
+    O->>S: Screen the text
+    S-->>O: 1 flagged, a giveaway option
+    O->>E: Replace that question
+    E-->>O: New question
+    O->>R: Review, with the source pages
+    R-->>O: 20 pass, 1 fail with a reason
+    loop Until nothing fails
+        O->>E: Rewrite the rejected question
+        E-->>O: New question
+        O->>R: Review it, only its pages
+        R-->>O: Pass
+    end
+    O->>F: approve, merge, render
+    F-->>O: Book PDF
+```
+
+After `topic_change_round` rounds the editor moves to a different topic in the same pages. After `max_rounds` you decide: drop the question or keep trying.
+
+### Studio and your session
+
+The Studio never runs agents. It hands your job to the Claude Code session, and shows what the session reports. That is why the session has to stay open.
+
+```mermaid
+flowchart LR
+    you([You]) -- PDFs and choices --> studio[Studio<br/>local web app]
+    studio -- job --> session[Claude Code session<br/>waits with intake wait]
+    session -- starts --> team[Agent team]
+    team -- progress events --> studio
+    session -- questions for you --> studio
+    team --> book([Your book])
+
+    classDef file fill:#f6c667,stroke:#b8862b,color:#1a1d2e
+    classDef agent fill:#4f8cf0,stroke:#2a5db0,color:#ffffff
+    classDef tool fill:#2a2f4a,stroke:#6c7196,color:#ffffff
+    class you,book file
+    class session,team agent
+    class studio tool
+```
 
 ## Cost and quality
 
@@ -149,6 +257,12 @@ The Studio opens in a window of its own when a job starts, with a start screen t
 In the job form you can name a cost target in USD or tokens and get the best team for it, or pick each role's model and effort and watch the estimate change. The estimate is a range: it starts from one measured job and adjusts to your own jobs over time. A target is not a hard limit, because the number of rewrite rounds can't be known in advance; if spending passes 120% of it, the Studio asks whether to go on. USD figures use API list prices, so on a subscription they are only a comparison.
 
 It never shows question text. Open it any time with `/exam-forge:studio`. To stop it opening by itself: `studio_auto_open` = `false`. A running Studio closes itself after 30 quiet minutes, and within about a minute and a half if a newer one has replaced it, but not while a window is open, a question is waiting for an answer, or a job has written an event in the last 15 minutes. One agent that stays silent for longer, with no window open, can see it close. `ask` starts it again when it needs one.
+
+### A look around
+
+| Pick the difficulty mix, the team and a cost target | Watch the job in the office |
+|---|---|
+| <img src="docs/team-and-cost.png" alt="New job form with difficulty sliders, role and model choices and a cost estimate"> | <img src="docs/studio.png" alt="Studio office with the team at work and live progress"> |
 
 ## Settings
 
