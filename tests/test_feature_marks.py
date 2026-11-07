@@ -985,6 +985,11 @@ class Docs(unittest.TestCase):
     def read(self, name):
         return (ROOT / name).read_text(encoding="utf-8")
 
+    def test_a_short_note_is_read_with_the_text_beside_it(self):
+        t = (ROOT / "agents" / "editor.md").read_text(encoding="utf-8")
+        self.assertIn("Read a short note together with the printed text beside it", t)
+        self.assertIn("Legibility is about reading the words", t)
+
     def test_editor_states_the_rule_plainly(self):
         text = self.read("agents/editor.md")
         self.assertRegex(text, r"(?i)underlin\w* and highlight\w* mean important")
