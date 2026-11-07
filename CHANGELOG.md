@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Added
+- Questions from figures: editors can use a graph, chart, diagram or labelled shape from the PDF, and the book prints the crop with the question. New command `forge.py figures`, question field `figure`, `source.kind` value `figure` and setting `figure_questions`. The reviewer opens the crop, and a missing or damaged file stops the print
 - `tools/ratchet.py`: a score ratchet for feature work. Tests come first, a better score is pushed, a worse one is undone, and a gate checks every test around a merge
 - Handwritten notes count as a source. Legible notes can carry questions, and the answer cites them as a handwritten note; unreadable ones are reported and never guessed at. A note such as "not on the exam" stays a scope instruction. The `handwritten_notes` setting turns this off
 - `forge.py notes` lists FreeText, sticky and Ink annotations of a page range, with a PNG crop of the ink. Ink saved stroke by stroke comes back as one note

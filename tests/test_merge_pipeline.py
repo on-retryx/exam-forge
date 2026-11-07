@@ -48,6 +48,10 @@ class Pipeline(unittest.TestCase):
 
     def decorate(self, page):
         page.add_ink_annot([[(100, 200), (160, 220), (220, 205)]])
+        page.draw_line((150, 320), (150, 560), width=1)
+        page.draw_line((150, 560), (420, 560), width=1)
+        for i, height in enumerate((60, 120, 200, 90)):
+            page.draw_rect(pymupdf.Rect(170 + i * 60, 560 - height, 210 + i * 60, 560), fill=(0.3, 0.5, 0.9))
 
     def cli(self, *args):
         env = {**os.environ, "HOME": str(self.d)}
@@ -73,7 +77,7 @@ class Pipeline(unittest.TestCase):
         self.ok("merge", self.run_dir, "--out", out, "--title", "Cells", "--format", "open", "--language", "en")
         book = json.loads(out.read_text(encoding="utf-8"))
         forge.S = forge.load_settings()
-        return book, forge.build_book_html(book, forge.S["answer_placement"])[0]
+        return book, forge.build_book_html(book, forge.S["answer_placement"], base=str(out.parent))[0]
 
     def test_notes_reach_the_book(self):
         listing = json.loads(self.ok("notes", self.pdf, "1-1", "--out", self.run_dir / "notes").stdout)
@@ -84,6 +88,63 @@ class Pipeline(unittest.TestCase):
         self.assertEqual(book["parts"][0]["questions"][-1]["source"].get("kind"), "handwriting")
         self.assertIn(forge.LABELS["en"]["handwritten_note"], html)
         self.assertNotIn(note["id"], html)
+
+    def figure(self):
+        listing = json.loads(self.ok("figures", self.pdf, "1-1", "--out", self.run_dir / "figures").stdout)
+        fig = listing[0] if isinstance(listing, list) else listing["figures"][0]
+        return {"id": fig["id"], "page": fig["page"], "file": fig["file"], "caption": "Energy by stage"}
+
+    def test_figures_are_printed_inside_the_book(self):
+        q = question(2, quote="Stage 2: 40 units", kind="figure")
+        q["figure"] = self.figure()
+        q["question"] = "Which stage does the graph shown peak at?"
+        book, html = self.finish([question(1), q])
+        self.assertIn("data:image/png;base64,", html)
+        self.assertIn("Energy by stage", html)
+        self.assertNotIn("figures/fig-p1", html)
+
+    def test_figure_and_note_questions_share_one_book(self):
+        fig = question(2, quote="Stage 2: 40 units", kind="figure")
+        fig["figure"] = self.figure()
+        fig["question"] = "Which stage does the graph shown peak at?"
+        note = json.loads(self.ok("notes", self.pdf, "1-1", "--out", self.run_dir / "notes").stdout)["notes"][0]
+        hand = question(3, quote="ATP is made here", kind="handwriting", note=note["id"])
+        book, html = self.finish([question(1), fig, hand])
+        self.assertEqual(book["handwriting_questions"], 1)
+        self.assertIn("data:image/png;base64,", html)
+        self.assertIn(forge.LABELS["en"]["handwritten_note"], html)
+
+    def annotated_page(self, draw):
+        doc = pymupdf.open()
+        page = doc.new_page()
+        page.insert_text((72, 90), BODY, fontsize=11)
+        draw(page)
+        path = self.d / "marked.pdf"
+        doc.save(str(path))
+        doc.close()
+        return json.loads(self.ok("figures", path, "1-1", "--out", self.run_dir / "marked").stdout)
+
+    def test_handwriting_is_not_a_figure(self):
+        strokes = [[(100 + i * 12, 200 + (i % 3) * 25), (106 + i * 12, 240)] for i in range(25)]
+        self.assertEqual(self.annotated_page(lambda p: p.add_ink_annot(strokes)), [])
+        def many(page):
+            for i in range(6):
+                page.add_ink_annot([[(100, 200 + i * 30), (300, 205 + i * 30), (420, 200 + i * 30)]])
+        self.assertEqual(self.annotated_page(many), [])
+
+    def test_highlights_are_not_a_figure(self):
+        def marked(page):
+            for word in page.get_text("words")[:6]:
+                page.add_highlight_annot(pymupdf.Rect(word[:4]))
+        self.assertEqual(self.annotated_page(marked), [])
+
+    def test_a_question_cannot_mention_a_figure_it_does_not_have(self):
+        q = question(1)
+        q["question"] = "Which stage does the graph shown peak at?"
+        chunk = self.run_dir / "chunk-1.json"
+        chunk.write_text(json.dumps({"source": "lesson.pdf", "chunk": 1, "format": "open", "page_start": 1, "page_end": 1,
+                                     "questions": [q]}), encoding="utf-8")
+        self.assertNotEqual(self.cli("check", chunk, "--format", "open").returncode, 0)
 
     def test_a_note_cannot_skip_the_review(self):
         hand = question(2, quote="ATP is made here", kind="handwriting")

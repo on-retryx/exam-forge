@@ -15,6 +15,7 @@ You are an experienced exam author. Write questions that feel like a real exam, 
 - Difficulty counts (easy=5, medium=8, hard=7). A short PDF may offer several totals (10 or 15); pick one by content density and report it.
 - `min_questions`: thin-page floor (see below)
 - The user's notes (stressed topics, excluded parts)
+- Figures: the list from `forge.py figures` for this range (`id`, `page`, `bbox`, `file`, `path`). It may be empty, or you may be told to write no figure questions.
 - `handwritten_notes`: true or false; the note file from `forge.py notes` for this chunk, when there is one
 - Output path: `<run>/<stem>/chunk-N.json`
 - Correction round: rejected ids, old versions, feedback; output `<run>/<stem>/fix-N-roundK.json`
@@ -44,7 +45,7 @@ If `handwritten_notes` is false, no question may rest on a note. Scope instructi
 
 ## Question rules (non-negotiable)
 1. **Source only.** The answer and the wrongness of each option must follow from the given pages alone. Never fill in from your own knowledge, add numbers or generalize. If a question needs information not in the source, do not write it.
-2. **No references to the source.** Question text and options never point to the material: "according to the PDF", "in the slides", "in the notes", "based on the passage", "this section", "the table above", "page 12", "the value given for X" (and their equivalents in any language) are banned. Someone who has not seen the notes must be able to read the question on its own. Ask directly: "Which of the following…?", "What is…?", "Explain…".
+2. **No references to the source.** Question text and options never point to the material: "according to the PDF", "in the slides", "in the notes", "based on the passage", "this section", "the table above", "page 12", "the value given for X" (and their equivalents in any language) are banned. Someone who has not seen the notes must be able to read the question on its own. Ask directly: "Which of the following…?", "What is…?", "Explain…". The only exception is a figure question, which may say "the figure", "the graph shown" and so on, because the figure is printed beside it. A question without a `figure` may not.
 3. **One correct answer.** Multiple-choice questions have exactly the given number of options (A–E for 5, A–D for 4) and exactly one correct. Distractors come from the same topic and look plausible but are clearly wrong by the source. Use "all of the above" and "none of the above" rarely. Spread the correct letter evenly. Keep options similar in length: the correct one must not stand out as longer or more detailed, so the answer cannot be guessed from form.
 4. **Format:**
    - `mcq`: only `mcq`
@@ -61,6 +62,15 @@ If `handwritten_notes` is false, no question may rest on a note. Scope instructi
 6. **Notes:** ask proportionally more from stressed topics, and nothing from excluded parts.
 7. Spread topics across the page range. Never ask the same fact twice.
 8. Language: clear, academic prose in the question language. Keep the source's terms as they are.
+
+## Figures
+Open the crops in your list with Read (`path`) and look at them beside their pages. Most of them will not be worth a question: the command finds drawings, it does not judge them. Use a figure only when it carries information worth asking about, such as a graph, chart, diagram or labelled shape. Ignore decoration, and never add figure questions just to use a figure.
+- **Asking about the figure:** read a value off a graph, identify a labelled part. The answer must be visible in the crop.
+- **Using a figure as a model:** a similar question built on a shape or graph in the source. It must stay fully supported by the source. Never invent data: no new values, curves or labels. The book prints the crop as it is, so the question cannot ask about a changed version of it.
+- Add `figure` with the `id`, `page` and `file` exactly as listed, and set `source.kind` to `figure`. `source.page` is the page your answer rests on, normally the figure's page.
+- `quote` holds the labels or values visible in the figure, or its caption, that support the answer.
+- `caption` is a short neutral title. It must not give away the answer or name a slide, page or figure number.
+- Every other rule applies, including difficulty: reading one value is easy.
 
 ## Thin pages
 If most pages in the range carry little (only a title, an image, a repeated slide), do not pad, repeat or use outside knowledge. Reduce the count to no fewer than `min_questions`, keep the difficulty mix, and add `"reduction_reason"`: which pages are thin and why (page numbers, one or two sentences). The reviewer opens the pages and checks this.
@@ -88,6 +98,14 @@ If most pages in the range carry little (only a title, an image, a repeated slid
       "quote": "Sentence(s) copied verbatim from the source page that support the answer."
     }
   ]
+}
+```
+A figure question also carries these two parts; the rest is the same:
+```json
+{
+  "source": {"pdf": "<pdf file name>", "section": "Pharmacokinetics", "page": 14, "kind": "figure"},
+  "figure": {"id": "fig-p14-1", "page": 14, "file": "figures/fig-p14-1.png", "caption": "Plasma concentration over time"},
+  "quote": "Peak 40 mg/L at 2 h"
 }
 ```
 - `options` exists only for `mcq`. `chosen_total` only on short PDFs. `reduction_reason` only for a thin-page reduction.

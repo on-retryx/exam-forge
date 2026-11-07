@@ -7,6 +7,7 @@ Commands:
   team                                  Print the resolved team and models
   pages <pdf>                           Page count
   render-pages <pdf> <3-12> --out DIR   Rasterize pages to PNG (pymupdf or pdftoppm)
+  figures <pdf> <3-12> --out DIR        Crop graphs, charts and diagrams to PNG (pymupdf); prints them as JSON
   notes <pdf> <3-12> --out DIR          List note annotations; crops ink to PNG (needs pymupdf)
   plan <pdf>... [--run DIR]             Question counts, difficulty split, chunks
        [--mix 0.2,0.5,0.3]              difficulty shares for this job
@@ -39,6 +40,7 @@ Settings: defaults in ../settings.json, then ~/.config/exam-forge/settings.json,
 then the file named by EXAM_FORGE_SETTINGS. Only the keys present are overridden.
 """
 import argparse
+import base64
 import datetime as dt
 import glob
 import html
@@ -318,7 +320,6 @@ FORMATS = {
     "full-mix": {"open", "blank", "true_false", "mcq"},
 }
 TYPES = ["mcq", "open", "blank", "true_false"]
-SOURCE_KINDS = ["text", "figure", "handwriting"]
 NOTE_ID = r"note-p([1-9]\d*)-[1-9]\d*"
 LETTERS = ["A", "B", "C", "D", "E"]
 OPTION_SETS = {4: LETTERS[:4], 5: LETTERS}
@@ -343,6 +344,31 @@ SOURCE_REFERENCES = {
         r"el yazısı(yla)? not", r"kenar not",
     ],
 }
+SOURCE_KINDS = ["text", "figure", "handwriting"]
+FIGURE_WORDS = "figure|diagram|chart|illustration|graph|plot|image|picture|photo|photograph|drawing|sketch"
+FIGURE_WORDS_TR = "şekil|grafik|diyagram|görsel|resim|çizim"
+FIGURE_POINTER = r"(?: (?:shown|above|below|here|beside))"
+NOT_A_VALUE = r"(?! (?:given|stated|listed) for\b)"
+# Pointing at a figure: wrong in a question that has none, and fine in one printed beside it. A word alone is not
+# enough: "the graph of f", "a figure of speech" and Turkish "bu şekilde" (in this way) are ordinary language.
+FIGURE_REFERENCES = {
+    "en": [
+        rf"\b(?:according to|based on|(?:as )?(?:shown|given|labell?ed|marked|depicted|illustrated) (?:in|on)|in|on|from) "
+        rf"(?:the|this) (?:{FIGURE_WORDS})\b(?! of\b){NOT_A_VALUE}{FIGURE_POINTER}*",
+        rf"\b(?:the|this|that) (?:figure|diagram|chart|illustration|drawing)\b(?! of (?:speech|accounts)\b){NOT_A_VALUE}{FIGURE_POINTER}*",
+        rf"\b(?:the|this|that) (?:{FIGURE_WORDS}|curve){FIGURE_POINTER}+",
+        rf"\bthe (?:above|preceding|following) (?:{FIGURE_WORDS}|curve)\b",
+    ],
+    "tr": [
+        rf"\b(?:yukarıda|aşağıda) (?:verilen|gösterilen) (?:{FIGURE_WORDS_TR}|grafiğ|resm)\w*",
+        r"\b(?:şekle|grafiğe|diyagrama|görsele|resme|çizime) göre",
+        r"\b(?:grafik|diyagram|görsel|resim|çizim)(?:t[ae]|d[ae])(?:ki)?\b",
+        r"\bşekildeki\b",
+        r"\bşekilde (?:gösterilen|görülen|verilen|yer alan|işaretli|belirtilen)",
+        r"\b(?:yukarıdaki|aşağıdaki|yandaki|verilen) (?:şekil\b|şekl|grafi[kğ]|diyagram|görsel|resim|resm|çizim)\w*",
+    ],
+}
+PNG_START, PNG_END = b"\x89PNG\r\n\x1a\n", b"IEND\xaeB`\x82"
 BROWSER_CANDIDATES = [
     "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
     "/Applications/Chromium.app/Contents/MacOS/Chromium",
@@ -739,13 +765,18 @@ def cmd_pages(a):
     print(n)
 
 
+def page_span(text):
+    m = re.fullmatch(r"(\d+)(?:-(\d+))?", text)
+    first, last = (int(m.group(1)), int(m.group(2) or m.group(1))) if m else (0, 0)
+    if not 1 <= first <= last:
+        fail("range must look like '3' or '3-12'")
+    return first, last
+
+
 def cmd_render_pages(a):
     """Rasterize a page range, the fallback when the Read tool cannot draw PDF pages."""
     pdf = Path(a.pdf).expanduser().resolve()
-    m = re.fullmatch(r"(\d+)(?:-(\d+))?", a.range)
-    if not m:
-        fail("range must look like '3' or '3-12'")
-    first, last = int(m.group(1)), int(m.group(2) or m.group(1))
+    first, last = page_span(a.range)
     target = Path(a.out).expanduser()
     target.mkdir(parents=True, exist_ok=True)
     fitz = load_fitz()
@@ -765,8 +796,167 @@ def cmd_render_pages(a):
         for p in sorted(target.glob(f"{pdf.stem}-p*.png")):
             print(p)
         return
+    no_page_tool()
+
+
+def no_page_tool():
     print("ERROR: no page image tool found. Run: forge.py doctor --install pdf_tool", file=sys.stderr)
     sys.exit(4)
+
+
+# ---------- figures ----------
+FIGURE_DPI = 150
+FIGURE_MIN_SIDE = 30  # points; below this it is a bullet, an icon or a rule
+FIGURE_MIN_AREA = 3600
+FIGURE_GAP = 12  # drawings this close belong to one figure
+FIGURE_LABEL_GAP = 14  # short text this close is a label of the figure
+FIGURE_LABEL_WORDS = 8  # a longer line is running text
+FIGURE_MARGIN = 4
+FIGURE_BACKGROUND = 0.9  # share of the page covered by a single background or frame
+FIGURE_REPEAT_PAGES = 3  # a logo: on at least this many pages...
+FIGURE_REPEAT_SHARE = 0.2  # ...and this share of them, as slides often repeat a figure while it builds up
+
+
+def box_near(a, b, gap):
+    return a[0] - gap <= b[2] and b[0] - gap <= a[2] and a[1] - gap <= b[3] and b[1] - gap <= a[3]
+
+
+def box_union(a, b):
+    return min(a[0], b[0]), min(a[1], b[1]), max(a[2], b[2]), max(a[3], b[3])
+
+
+def box_area(b):
+    return (b[2] - b[0]) * (b[3] - b[1])
+
+
+def cluster_boxes(items):
+    """Joins (box, members) pairs that touch or nearly touch, until none are left to join."""
+    joined = True
+    while joined:
+        joined, groups = False, []
+        for box, members in items:
+            for g in groups:
+                if box_near(g[0], box, FIGURE_GAP):
+                    g[0], joined = box_union(g[0], box), True
+                    g[1].extend(members)
+                    break
+            else:
+                groups.append([box, list(members)])
+        items = groups
+    return items
+
+
+def page_marks(page):
+    """Images and drawings on a page as clusters, minus what only covers the whole page.
+    Coordinates are those of the page before any rotation, which is what these calls report."""
+    view = tuple(page.rect * page.derotation_matrix)
+    found = [(i["bbox"], {"key": i["digest"].hex(), "image": True, "ops": []})
+             for i in page.get_image_info(hashes=True)]
+    found += [(tuple(d["rect"]), {"key": repr(d["items"]), "image": False, "ops": [x[0] for x in d["items"]]})
+              for d in page.get_drawings()]
+    items = []
+    for box, member in found:
+        box = max(box[0], view[0]), max(box[1], view[1]), min(box[2], view[2]), min(box[3], view[3])
+        if box[0] <= box[2] and box[1] <= box[3] and box_area(box) < FIGURE_BACKGROUND * box_area(view):
+            items.append((box, [member]))
+    return cluster_boxes(items)
+
+
+def is_figure(box, members):
+    width, height = box[2] - box[0], box[3] - box[1]
+    if min(width, height) < FIGURE_MIN_SIDE or width * height < FIGURE_MIN_AREA:
+        return False
+    if any(m["image"] for m in members):
+        return True
+    ops = [op for m in members for op in m["ops"]]
+    return len(ops) >= 3 and not (len(members) < 4 and set(ops) == {"re"})  # a lone box around text is no figure
+
+
+def label_boxes(page):
+    """Short lines of text on a page. Words carry their block and line numbers."""
+    lines = {}
+    for x0, y0, x1, y1, _, block, line, _ in page.get_text("words"):
+        b = lines.setdefault((block, line), [(x0, y0, x1, y1), 0])
+        b[0] = box_union(b[0], (x0, y0, x1, y1))
+        b[1] += 1
+    return [box for box, words in lines.values() if words <= FIGURE_LABEL_WORDS]
+
+
+def with_labels(box, labels):
+    """Twice, because an axis title sits beyond the tick labels."""
+    for _ in range(2):
+        for label in labels:
+            if box_near(box, label, FIGURE_LABEL_GAP):
+                box = box_union(box, label)
+    return box
+
+
+def cluster_key(members):
+    return hashlib.sha256("|".join(sorted(m["key"] for m in members)).encode("utf-8")).hexdigest()
+
+
+def repeated_marks(doc):
+    """Keys of clusters that recur across the whole file, so a chunk gets the same answer as the book."""
+    pages = {}
+    for page in doc:
+        for key in {cluster_key(members) for _, members in page_marks(page)}:
+            pages[key] = pages.get(key, 0) + 1
+    floor = max(FIGURE_REPEAT_PAGES, math.ceil(doc.page_count * FIGURE_REPEAT_SHARE))
+    return {key for key, count in pages.items() if count >= floor}
+
+
+def without_annots(doc, fitz):
+    """An in-memory copy: get_drawings() reports annotations too, and a reader's ink is no figure."""
+    if not any(page.first_annot for page in doc):
+        return doc
+    copy = fitz.open("pdf", doc.tobytes())
+    for page in copy:
+        annot = page.first_annot
+        while annot:
+            annot = page.delete_annot(annot)
+    return copy
+
+
+def crop_figures(doc, fitz, first, last, target):
+    drawn = without_annots(doc, fitz)
+    repeated = repeated_marks(drawn)
+    margin = (-FIGURE_MARGIN, -FIGURE_MARGIN, FIGURE_MARGIN, FIGURE_MARGIN)
+    figures = []
+    for number in range(first, min(last, doc.page_count) + 1):
+        page = doc[number - 1]
+        keep = [box for box, members in page_marks(drawn[number - 1]) if is_figure(box, members) and cluster_key(members) not in repeated]
+        labels = label_boxes(page) if keep else []
+        crops = [(fitz.Rect(with_labels(box, labels)) + margin) * page.rotation_matrix & page.rect for box in keep]
+        n = 0
+        for rect in sorted(crops, key=lambda r: (r.y0, r.x0)):
+            pix = page.get_pixmap(dpi=FIGURE_DPI, clip=rect)
+            if pix.is_unicolor:  # white on white, or an area with nothing drawn
+                continue
+            n += 1
+            fig = f"fig-p{number}-{n}"
+            path = target / f"{fig}.png"
+            pix.save(str(path))
+            figures.append({"id": fig, "page": number, "bbox": [round(v, 1) for v in rect],
+                            "file": f"{target.name}/{fig}.png", "path": str(path)})
+    return figures
+
+
+def cmd_figures(a):
+    """Crops what could carry exam content, for the editors to choose from. `file` is relative to the folder
+    that holds --out, which is the chunk files' folder, so a question can name it as it stands."""
+    first, last = page_span(a.range)
+    fitz = load_fitz()
+    if not fitz:
+        no_page_tool()
+    pdf = Path(a.pdf).expanduser().resolve()
+    target = Path(a.out).expanduser().resolve()
+    try:
+        target.mkdir(parents=True, exist_ok=True)
+        with fitz.open(str(pdf)) as doc:
+            figures = crop_figures(doc, fitz, first, last, target)
+    except Exception as e:  # pymupdf has many error types, and a damaged PDF can raise any of them
+        fail(f"cannot read figures from {pdf.name}: {e}")
+    print(json.dumps(figures, ensure_ascii=False, indent=2))
 
 
 NOTE_KINDS = {"Ink": "ink", "FreeText": "freetext", "Text": "text"}
@@ -976,13 +1166,62 @@ def cmd_plan(a):
 
 
 # ---------- check ----------
-def source_reference(text):
-    for lang in SOURCE_REFERENCES.values():
-        for rx in lang:
-            m = re.search(rx, text, re.IGNORECASE)
-            if m:
-                return m.group(0)
+def source_reference(text, figure=False):
+    """The first words that point at the source. A question with a figure may point at that figure only, so
+    those words go first, and whatever else they lean on ("the figure on page 12") is still caught."""
+    pointers = [rx for lang in FIGURE_REFERENCES.values() for rx in lang]
+    for rx in pointers if figure else []:
+        text = re.sub(rx, " ", text, flags=re.IGNORECASE)
+    for rx in [rx for lang in SOURCE_REFERENCES.values() for rx in lang] + ([] if figure else pointers):
+        m = re.search(rx, text, re.IGNORECASE)
+        if m:
+            return m.group(0)
     return None
+
+
+def read_figure(fig, base):
+    """The image bytes of a figure. Raises ValueError with the reason: a book never gets a broken image."""
+    name = fig["file"]
+    try:
+        data = (Path(base) / str(name)).read_bytes()
+    except OSError:
+        raise ValueError(f"figure file '{name}' cannot be read (looked in {base})")
+    if not (data.startswith(PNG_START) and data.endswith(PNG_END)):
+        raise ValueError(f"figure file '{name}' is not a complete PNG image")
+    return data
+
+
+def figure_errors(q, page_range=None, base=None):
+    """`base` is the folder of the file that holds the question, when there is one."""
+    qid = q.get("id", "?")
+    src = q.get("source") if isinstance(q.get("source"), dict) else {}
+    kind, fig = src.get("kind"), q.get("figure")
+    e = []
+    if fig is None:
+        if kind == "figure":
+            e.append(f"{qid}: source.kind is 'figure' but the question has no figure")
+        return e
+    if kind != "figure":
+        e.append(f"{qid}: a question with a figure needs source.kind 'figure'")
+    if not isinstance(fig, dict):
+        return e + [f"{qid}: figure must be {{id, page, file, caption}}"]
+    if not fig.get("id"):
+        e.append(f"{qid}: figure has no id")
+    page = fig.get("page")
+    if not isinstance(page, int) or isinstance(page, bool):
+        e.append(f"{qid}: figure page must be a whole number")
+    elif page_range and not (page_range[0] <= page <= page_range[1]):
+        e.append(f"{qid}: figure page {page} is outside chunk range {page_range}")
+    if not isinstance(fig.get("caption", ""), str):
+        e.append(f"{qid}: figure caption must be text")
+    if not fig.get("file"):
+        e.append(f"{qid}: figure has no file")
+    elif base is not None:
+        try:
+            read_figure(fig, base)
+        except ValueError as why:
+            e.append(f"{qid}: {why}")
+    return e
 
 
 def rests_on_note(q):
@@ -1011,7 +1250,7 @@ def note_errors(q):
     return e
 
 
-def question_errors(q, fmt=None, page_range=None, mcq_options=None):
+def question_errors(q, fmt=None, page_range=None, mcq_options=None, base=None):
     e = []
     qid = q.get("id", "?")
     for field in ["id", "section", "type", "difficulty", "question", "answer", "explanation", "source", "quote"]:
@@ -1041,7 +1280,10 @@ def question_errors(q, fmt=None, page_range=None, mcq_options=None):
     if t == "blank" and "____" not in str(q.get("question", "")):
         e.append(f"{qid}: a blank question must contain '____'")
     text = " ".join([str(q.get("question", ""))] + [str(v) for v in (q.get("options") or {}).values()])
-    ref = source_reference(text)
+    fig = q.get("figure")
+    if isinstance(fig, dict):
+        text += f' {fig.get("caption", "")}'  # printed beside the question
+    ref = source_reference(text, figure=fig is not None)
     if ref:
         e.append(f"{qid}: reference to the source: '{ref}'")
     src = q.get("source") or {}
@@ -1049,7 +1291,7 @@ def question_errors(q, fmt=None, page_range=None, mcq_options=None):
         e.append(f"{qid}: source must be {{pdf, section, page(int)}}")
     elif page_range and not (page_range[0] <= src["page"] <= page_range[1]):
         e.append(f"{qid}: source page {src['page']} is outside chunk range {page_range}")
-    return e + note_errors(q)
+    return e + figure_errors(q, page_range, base) + note_errors(q)
 
 
 def parse_split(text):
@@ -1081,8 +1323,11 @@ def cmd_check(a):
     texts = [str(q.get("question", "")).strip().lower() for q in questions]
     if len(set(texts)) != len(texts):
         errors.append("identical question text repeated")
+    base = Path(a.json).expanduser().resolve().parent
     for q in questions:
-        errors += question_errors(q, fmt, page_range, a.mcq_options or S["mcq_options"])
+        errors += question_errors(q, fmt, page_range, a.mcq_options or S["mcq_options"], base)
+        if q.get("figure") is not None and not S["figure_questions"]:
+            errors.append(f"{q.get('id', '?')}: figure questions are turned off (figure_questions)")
         if rests_on_note(q) and not notes_allowed:
             errors.append(f"{q.get('id', '?')}: rests on a handwritten note, but handwritten_notes is off")
     count = {z: sum(1 for q in questions if q.get("difficulty") == z) for z in DIFFICULTIES}
@@ -1223,8 +1468,8 @@ def cmd_source_pages(a):
     pages = set()
     for q in data["questions"]:
         if q["id"] in wanted:
-            p = q["source"]["page"]
-            pages.update(x for x in (p - 1, p, p + 1) if lo <= x <= hi)
+            for p in [q["source"]["page"]] + ([q["figure"]["page"]] if q.get("figure") else []):
+                pages.update(x for x in (p - 1, p, p + 1) if lo <= x <= hi)
     spans = []
     for p in sorted(pages):
         if spans and p == spans[-1][1] + 1:
@@ -1232,6 +1477,17 @@ def cmd_source_pages(a):
         else:
             spans.append([p, p])
     print(",".join(f"{x}-{y}" if x != y else str(x) for x, y in spans))
+
+
+def move_figure(q, old, new):
+    """A question's figure file is relative to the file holding it, so it changes when the question moves."""
+    fig = q.get("figure")
+    if isinstance(fig, dict) and fig.get("file"):
+        path = (Path(old).expanduser() / fig["file"]).resolve()
+        try:
+            fig["file"] = Path(os.path.relpath(path, Path(new).expanduser().resolve())).as_posix()
+        except ValueError:  # another drive on Windows
+            fig["file"] = str(path)
 
 
 def cmd_replace(a):
@@ -1250,6 +1506,7 @@ def cmd_replace(a):
         q["round"] = old.get("round", 1) + 1
         if old.get("audit_required"):
             q["audit_required"] = True
+        move_figure(q, Path(a.fix).parent, Path(a.chunk).parent)
         data["questions"][idx[qid]] = q
     write_json(a.chunk, data)
     run, pdf, chunk = file_context(a.chunk)
@@ -1280,6 +1537,7 @@ def cmd_merge(a):
                     unverified.append(q["id"])
                 elif q.get("audit_required") and not q.get("audited"):
                     unaudited.append(q["id"])
+                move_figure(q, p.parent, Path(a.out).parent)
                 questions.append(q)
         pdf = pdf or d.name
         stem = Path(pdf).stem
@@ -1337,13 +1595,27 @@ def source_line(q, L):
     return f'{line} · {L["handwritten_note"]}' if rests_on_note(q) else line
 
 
-def question_html(no, q, L, inline):
+def figure_html(q, base):
+    """As a data URI: the book must stand alone, and the PDF printer never sees the run folder."""
+    fig = q["figure"]
+    try:
+        data = read_figure(fig, base)
+    except ValueError as e:
+        fail(f'{q["id"]}: {e}')
+    caption = esc(fig.get("caption", ""))
+    return (f'<figure class="q-figure"><img src="data:image/png;base64,{base64.b64encode(data).decode("ascii")}" '
+            f'alt="{caption or esc(fig["id"])}">' + (f"<figcaption>{caption}</figcaption>" if caption else "") + "</figure>")
+
+
+def question_html(no, q, L, inline, base="."):
     t = q["type"]
     parts = [f'<article class="question"><header><span class="no">{no}</span>'
              f'<span class="badge {q["difficulty"]}">{L[q["difficulty"]]}</span>'
              f'<span class="type">{L[t]}</span></header>']
     body = esc(q["question"]).replace("____", '<span class="blank"></span>')
     parts.append(f'<p class="stem">{body}</p>')
+    if q.get("figure"):
+        parts.append(figure_html(q, base))
     if t == "mcq":
         parts.append('<ol class="options">' + "".join(
             f'<li><b>{k})</b> {esc(q["options"][k])}</li>' for k in LETTERS if k in q["options"]) + "</ol>")
@@ -1379,7 +1651,7 @@ def format_date(iso, L):
     return L["date"].format(day=d.day, month=L["months"][d.month - 1], year=d.year)
 
 
-def build_book_html(book, placement, contents=True):
+def build_book_html(book, placement, contents=True, base="."):
     L = LABELS.get(book.get("language"), LABELS["en"])
     parts = book["parts"]
     multi = len(parts) > 1
@@ -1401,7 +1673,7 @@ def build_book_html(book, placement, contents=True):
             start = no
             cells, answers = [], []
             for q in qs:
-                cells.append(question_html(no, q, L, placement == "inline"))
+                cells.append(question_html(no, q, L, placement == "inline", base))
                 answers.append(answer_html(no, q, L))
                 no += 1
             toc.append(f'<li class="{"toc-sub" if multi else ""}"><span class="toc-no">{sec_no:02d}</span>'
@@ -1451,14 +1723,15 @@ def cmd_render(a):
     bad = [q["id"] for q in questions if not q.get("verified")]
     if bad:
         fail(f"unverified questions cannot enter a book: {bad}")
+    base = Path(a.json).expanduser().resolve().parent
     errors = []
     for q in questions:
-        errors += question_errors(q, book.get("format"))
+        errors += question_errors(q, book.get("format"), base=base)
     if errors:
         fail("pre-render check: " + "; ".join(errors[:10]))
     placement = a.answers or S["answer_placement"]
     contents = not a.no_contents and S["book_contents"] != "never"
-    page, total, sections = build_book_html(book, placement, contents)
+    page, total, sections = build_book_html(book, placement, contents, base)
     out = Path(a.out).expanduser().resolve()
     try:
         out.parent.mkdir(parents=True, exist_ok=True)
@@ -2337,6 +2610,8 @@ def main():
     p = sub.add_parser("render-pages"); p.add_argument("pdf"); p.add_argument("range")
     p.add_argument("--out", required=True); p.add_argument("--dpi", type=int, default=110)
     p.set_defaults(f=cmd_render_pages)
+    p = sub.add_parser("figures"); p.add_argument("pdf"); p.add_argument("range")
+    p.add_argument("--out", required=True); p.set_defaults(f=cmd_figures)
     p = sub.add_parser("notes"); p.add_argument("pdf"); p.add_argument("range")
     p.add_argument("--out", required=True); p.add_argument("--dpi", type=int, default=200)
     p.set_defaults(f=cmd_notes)

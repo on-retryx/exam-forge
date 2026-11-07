@@ -333,7 +333,7 @@ class Fields(Base):
         self.assertEqual(self.errors(question()), [])
 
     def test_each_allowed_kind_passes(self):
-        for kind in forge.SOURCE_KINDS:
+        for kind in [k for k in forge.SOURCE_KINDS if k != "figure"]:  # a figure needs its image; see test_feature_figures
             self.assertEqual(self.errors(question(kind=kind)), [], kind)
 
     def test_a_handwriting_question_with_a_note_id_passes(self):

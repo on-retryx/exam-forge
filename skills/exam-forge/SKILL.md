@@ -21,7 +21,7 @@ Constants:
 - **No extra sources.** Web, other files and model knowledge cannot enter question content.
 - **Unreviewed questions never enter a book.** `forge.py` enforces this; do not work around it.
 - **Privacy.** Questions are the user's study material. Unless asked, do not read output or run folders after the job, and do not copy question text elsewhere (notes, memory, logs).
-- **Copyright.** The user provides only material they may use. Do not turn questions into long verbatim copies of the source.
+- **Copyright.** The user provides only material they may use. Do not turn questions into long verbatim copies of the source. A book reprints the figures its questions use.
 
 ## 0. Requirements
 Do this first, every time. The first of `python3`, `python`, `py -3` that prints a Python 3 version is `PY`:
@@ -83,19 +83,25 @@ Give a one-line summary (pages, questions and chunks per PDF, the team preset) a
 If an agent reports that it cannot open PDF pages (no page tool), stop waiting work and ask whether to install it, with `ask` on a form job and AskUserQuestion otherwise. On yes, run `$PY "$FORGE" doctor --install pdf_tool` and restart the same chunks.
 
 ## 3. Parallel writing
+**Figures.** If `s.figure_questions` is true, run this once for each chunk before starting its editor:
+```bash
+$PY "$FORGE" figures "<pdf>" <start>-<end> --out "<run>/<stem>/figures"
+```
+It prints a JSON list of crops: `id`, `page`, `bbox`, `file` (relative to `<run>/<stem>/`, so a question can name it as it stands) and `path` (absolute, for opening it). Exit 4 means pymupdf is missing: continue without figures and say so in one line, because figures are optional. If `s.figure_questions` is false, skip this and tell each editor to write no figure questions; `check` rejects them.
+
 First list the notes of each chunk, whatever `plan.handwritten_notes` says, since scope instructions apply either way:
 ```bash
 $PY "$FORGE" notes "<pdf>" <start-end> --out "<run>/<stem>/notes" > "<run>/<stem>/notes-N.json"
 ```
 Exit 4 means pymupdf is missing. That does not stop the job: delete the empty file, tell the user in one line that only notes visible on the page images will be seen, and go on without a note file. Any other failure, do the same.
 
-Start one **editor** for each chunk of each PDF, **in one message, in the background**. Each prompt carries: the marker line, `FORGE`, `read_pages_supported` (if false: "do not try Read with `pages`; use the fallback directly", and the same note goes to reviewers), absolute PDF path, page range, chunk number, format, options per question, field, question language, the chunk's difficulty counts (all options on a short PDF), `min_questions`, the notes, `handwritten_notes` (from `plan.handwritten_notes`), the note file path if there is one, output path `<run>/<stem>/chunk-N.json`. For chunks of one PDF add: "stay in your range; do not repeat neighbouring chunks."
+Start one **editor** for each chunk of each PDF, **in one message, in the background**. Each prompt carries: the marker line, `FORGE`, `read_pages_supported` (if false: "do not try Read with `pages`; use the fallback directly", and the same note goes to reviewers), absolute PDF path, page range, chunk number, format, options per question, field, question language, the chunk's difficulty counts (all options on a short PDF), `min_questions`, the notes, the figure list for that chunk (it may be empty), `handwritten_notes` (from `plan.handwritten_notes`), the note file path if there is one, output path `<run>/<stem>/chunk-N.json`. For chunks of one PDF add: "stay in your range; do not repeat neighbouring chunks."
 
 ## 4. Review queue
 When an editor finishes, do not wait for the others; move that chunk forward:
 1. `$PY "$FORGE" check <chunk> --format <f> --mcq-options <n> --expected easy=..,medium=..,hard=.. --min <min_questions>` (separate alternatives on a short PDF with `|`). On errors, send the list back to the same editor with SendMessage, or start a new editor.
 2. **Screener** (if `team.screener` is set): start it in the background with the marker, `FORGE`, the chunk file, format, options per question, output `<run>/<stem>/screen-N-round1.json`. It does not open the PDF. Then `$PY "$FORGE" screen <chunk> <screen.json>`. Its `remaining` list goes straight to the correction loop (section 5), before any reviewer runs. A PASS here is not approval.
-3. **Reviewer**: start in the background with the marker, `FORGE`, chunk file, PDF path, page range, format, options per question, notes, `handwritten_notes`, the note file path if there is one, output `<run>/<stem>/review-N-round1.json`. If `check` warned about a thin-page reduction, ask the reviewer to check `reduction_reason`.
+3. **Reviewer**: start in the background with the marker, `FORGE`, chunk file, PDF path, page range, format, options per question, notes, `handwritten_notes`, the note file path if there is one, output `<run>/<stem>/review-N-round1.json`. A question's `figure.file` is relative to the chunk file's folder. If `check` warned about a thin-page reduction, ask the reviewer to check `reduction_reason`.
 4. `$PY "$FORGE" approve <chunk> <review.json>`. `remaining` lists the failures. If the review file has `"reduction": "REJECT"`, ask the editor to add the missing questions (same difficulty mix, new ids), run `check` without `--min`, and review the new ones.
 5. **Chief editor** (only if `team.chief_editor` is set, after a chunk has no failures left): `$PY "$FORGE" audit-sample <chunk>` prints the ids. Start the chief editor with those ids, the marker, `FORGE`, chunk file, PDF path, the note file path if there is one, output `<run>/<stem>/audit-N-round1.json`. Then `$PY "$FORGE" approve <chunk> <audit.json> --audit`. Failures go to section 5.
 
@@ -103,7 +109,7 @@ When an editor finishes, do not wait for the others; move that chunk forward:
 On a job with `plan.budget`, run `$PY "$FORGE" cost "<run>" --budget-check` before each new round. Exit 6 means spending has passed 120% of the target: ask with `--option "continue=Keep going" --option "stop=Stop and print what is verified"`. It fires once per job. Stopping still needs the shorter-book approval below.
 
 For failures from any layer:
-1. Start a new editor in correction mode: rejected ids, old questions, the feedback, the instruction to write new ones with the same difficulty and type, a short list of the other questions (to avoid repeats), output `<run>/<stem>/fix-N-roundK.json`.
+1. Start a new editor in correction mode: rejected ids, old questions, the feedback, the instruction to write new ones with the same difficulty and type, a short list of the other questions (to avoid repeats), the chunk's figure list, output `<run>/<stem>/fix-N-roundK.json`.
 2. `$PY "$FORGE" replace <chunk> <fix.json>`
 3. Screen those ids again. Then, to review them, get the pages with `$PY "$FORGE" source-pages <chunk> --ids a,b`, and give the reviewer only those ids and those pages, with `handwritten_notes` and the note file path. The correction editor gets both too. Never send a whole chunk back for review; repeating pages is the main cost. Output `review-N-round(K+1).json`, then `approve`.
 4. Repeat until nothing fails. After `s.topic_change_round` rounds, have the editor choose **a different topic** in the same page range (same difficulty and type). After `s.max_rounds`, ask the user: drop that question and print a shorter book, or continue. Never print a shorter book without approval.
@@ -125,7 +131,7 @@ $PY "$FORGE" render "<run>/book-<name>.json" "<output>/<name>-questions.pdf" --a
 - **Contents page:** add `--no-contents` when the form's `contents` is false, or when the user said no in the chat.
 - **One book per PDF:** one folder per `merge`; `<name>` is the stem. **Combined book:** every folder in one `merge`, each PDF becomes a part with its own cover, numbering is continuous, and `<name>` is a short slug of the title.
 - **Titles:** with `s.section_titles` = `logical`, write a clear subject title for the book and each part from the PDF's content (for example `Week 3: Pharmacokinetics`) and pass it with `--title` and `--part`. Never use the word "PDF" in a title. With `filename`, part names come from the file names.
-- `render` keeps an older book with a timestamp, orders sections as in the source and easy to hard inside each.
+- `render` keeps an older book with a timestamp, orders sections as in the source and easy to hard inside each. It embeds each figure in the book, and stops with exit 2 and the question id if a figure file is missing or damaged; run `figures` again for that chunk's pages, then `render`.
 - If `render` exits with 3, no browser was found and the book was written as `.html`. Tell the user they can print it to PDF from a browser.
 - Open the first 3 pages of the PDF and one answer page with Read to check for broken characters or overflow. You do not need to reread the questions.
 

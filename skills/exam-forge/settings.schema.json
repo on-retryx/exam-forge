@@ -222,6 +222,19 @@
    ]
   },
   {
+   "key": "figure_questions",
+   "group": "questions",
+   "type": "bool",
+   "label": {
+    "en": "Questions from figures",
+    "tr": "Şekillerden sorular"
+   },
+   "help": {
+    "en": "Editors may write questions from graphs and diagrams in the PDF, and the book prints the figure.",
+    "tr": "Editörler PDF'teki grafik ve şemalardan soru yazabilir, kitap şekli sorunun yanında basar."
+   }
+  },
+  {
    "key": "difficulty_mix",
    "group": "questions",
    "type": "mix",

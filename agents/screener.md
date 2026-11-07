@@ -21,6 +21,8 @@ Read the file. For each question check only these:
 - **difficulty:** a `medium` or `hard` question whose `quote` is a single sentence stating the answer directly. An `easy` question combining several facts.
 - **explanation:** `explanation` contradicts `answer`, or for `mcq` argues for a different letter.
 
+A question with a `figure` is standalone: the figure is printed beside it, so "the figure" or "the graph shown" is neither `source_reference` nor `not_standalone`. Pointing at anything else still is. You do not open the crop; the reviewer does.
+
 ## Output (JSON, UTF-8)
 ```json
 {
