@@ -21,6 +21,7 @@ Constants:
 - **No extra sources.** Web, other files and model knowledge cannot enter question content.
 - **Unreviewed questions never enter a book.** `forge.py` enforces this; do not work around it.
 - **Privacy.** Questions are the user's study material. Unless asked, do not read output or run folders after the job, and do not copy question text elsewhere (notes, memory, logs).
+- **Marks.** In a PDF, underline and highlight mean important, never cancelled. Only a line through the text excludes it. A handwritten word such as "remove" still excludes.
 - **Copyright.** The user provides only material they may use. Do not turn questions into long verbatim copies of the source. A book reprints the figures its questions use.
 
 ## 0. Requirements
@@ -95,23 +96,33 @@ $PY "$FORGE" notes "<pdf>" <start-end> --out "<run>/<stem>/notes" > "<run>/<stem
 ```
 Exit 4 means pymupdf is missing. That does not stop the job: delete the empty file, tell the user in one line that only notes visible on the page images will be seen, and go on without a note file. Any other failure, do the same.
 
-Start one **editor** for each chunk of each PDF, **in one message, in the background**. Each prompt carries: the marker line, `FORGE`, `read_pages_supported` (if false: "do not try Read with `pages`; use the fallback directly", and the same note goes to reviewers), absolute PDF path, page range, chunk number, format, options per question, field, question language, the chunk's difficulty counts (all options on a short PDF), `min_questions`, the notes, the figure list for that chunk (it may be empty), `handwritten_notes` (from `plan.handwritten_notes`), the note file path if there is one, output path `<run>/<stem>/chunk-N.json`. For chunks of one PDF add: "stay in your range; do not repeat neighbouring chunks."
+First read the marks of each chunk. It costs no tokens:
+```bash
+$PY "$FORGE" marks "<pdf>" <start-end> --out "<run>/<stem>/marks-N.json"
+```
+Exit 4 means pymupdf is missing. Do not stop or install for this: go on without a marks file, and the agents still look for marks on the pages. Below, leave out the marks file wherever there is none.
+
+Start one **editor** for each chunk of each PDF, **in one message, in the background**. Each prompt carries: the marker line, `FORGE`, `read_pages_supported` (if false: "do not try Read with `pages`; use the fallback directly", and the same note goes to reviewers), absolute PDF path, page range, chunk number, format, options per question, field, question language, the chunk's difficulty counts (all options on a short PDF), `min_questions`, the notes, the figure list for that chunk (it may be empty), `handwritten_notes` (from `plan.handwritten_notes`), the note file path if there is one, the marks file, `s.marked_text_priority`, `s.marked_text_share`, output path `<run>/<stem>/chunk-N.json`. For chunks of one PDF add: "stay in your range; do not repeat neighbouring chunks."
 
 ## 4. Review queue
 When an editor finishes, do not wait for the others; move that chunk forward:
-1. `$PY "$FORGE" check <chunk> --format <f> --mcq-options <n> --expected easy=..,medium=..,hard=.. --min <min_questions>` (separate alternatives on a short PDF with `|`). On errors, send the list back to the same editor with SendMessage, or start a new editor.
-2. **Screener** (if `team.screener` is set): start it in the background with the marker, `FORGE`, the chunk file, format, options per question, output `<run>/<stem>/screen-N-round1.json`. It does not open the PDF. Then `$PY "$FORGE" screen <chunk> <screen.json>`. Its `remaining` list goes straight to the correction loop (section 5), before any reviewer runs. A PASS here is not approval.
-3. **Reviewer**: start in the background with the marker, `FORGE`, chunk file, PDF path, page range, format, options per question, notes, `handwritten_notes`, the note file path if there is one, output `<run>/<stem>/review-N-round1.json`. A question's `figure.file` is relative to the chunk file's folder. If `check` warned about a thin-page reduction, ask the reviewer to check `reduction_reason`.
+1. `$PY "$FORGE" check <chunk> --format <f> --mcq-options <n> --expected easy=..,medium=..,hard=.. --min <min_questions> --marks <marks file>` (separate alternatives on a short PDF with `|`). On errors, send the list back to the same editor with SendMessage, or start a new editor.
+2. **Screener** (if `team.screener` is set): start it in the background with the marker, `FORGE`, the chunk file, format, options per question, the marks file, output `<run>/<stem>/screen-N-round1.json`. It does not open the PDF. Then `$PY "$FORGE" screen <chunk> <screen.json>`. Its `remaining` list goes straight to the correction loop (section 5), before any reviewer runs. A PASS here is not approval.
+3. **Reviewer**: start in the background with the marker, `FORGE`, chunk file, PDF path, page range, format, options per question, notes, `handwritten_notes`, the note file path if there is one, the marks file, `s.marked_text_priority`, `s.marked_text_share`, output `<run>/<stem>/review-N-round1.json`. A question's `figure.file` is relative to the chunk file's folder. If `check` warned about a thin-page reduction, ask the reviewer to check `reduction_reason`.
 4. `$PY "$FORGE" approve <chunk> <review.json>`. `remaining` lists the failures. If the review file has `"reduction": "REJECT"`, ask the editor to add the missing questions (same difficulty mix, new ids), run `check` without `--min`, and review the new ones.
-5. **Chief editor** (only if `team.chief_editor` is set, after a chunk has no failures left): `$PY "$FORGE" audit-sample <chunk>` prints the ids. Start the chief editor with those ids, the marker, `FORGE`, chunk file, PDF path, the note file path if there is one, output `<run>/<stem>/audit-N-round1.json`. Then `$PY "$FORGE" approve <chunk> <audit.json> --audit`. Failures go to section 5.
+5. **Chief editor** (only if `team.chief_editor` is set, after a chunk has no failures left): `$PY "$FORGE" audit-sample <chunk>` prints the ids. Start the chief editor with those ids, the marker, `FORGE`, chunk file, PDF path, the note file path if there is one, the marks file, output `<run>/<stem>/audit-N-round1.json`. Then `$PY "$FORGE" approve <chunk> <audit.json> --audit`. Failures go to section 5.
+6. **Marks** (after a chunk has no failures left, if it has a marks file): `$PY "$FORGE" marks-coverage <chunk> <marks file> --fail-out "<run>/<stem>/marks-fail-N.json"`. Keep its numbers for the final report.
+   - **Exit 1:** a question rests on struck text or names a mark that does not exist. Run `$PY "$FORGE" approve <chunk> "<run>/<stem>/marks-fail-N.json"`, then section 5.
+   - **`needs_more` is true, or the review has `"marked_share": "SHORT"`:** send `missing` (and `marked_missing`) to the editor, who adds questions for the marks worth asking about, with new ids in the chunk and the same difficulty mix, and names any mark that holds nothing to ask. Run `check` without `--min`, then screen and review only the new ones. Once is enough. With `s.marked_text_priority` false, `needs_more` stays false.
+   - If a reviewer reports a mark the page contradicts, the page decides: delete that entry from the marks file and run this step again.
 
 ## 5. Correction loop
 On a job with `plan.budget`, run `$PY "$FORGE" cost "<run>" --budget-check` before each new round. Exit 6 means spending has passed 120% of the target: ask with `--option "continue=Keep going" --option "stop=Stop and print what is verified"`. It fires once per job. Stopping still needs the shorter-book approval below.
 
 For failures from any layer:
-1. Start a new editor in correction mode: rejected ids, old questions, the feedback, the instruction to write new ones with the same difficulty and type, a short list of the other questions (to avoid repeats), the chunk's figure list, output `<run>/<stem>/fix-N-roundK.json`.
+1. Start a new editor in correction mode: rejected ids, old questions, the feedback, the instruction to write new ones with the same difficulty and type, a short list of the other questions (to avoid repeats), the chunk's figure list, the marks file with `s.marked_text_priority` and `s.marked_text_share`, output `<run>/<stem>/fix-N-roundK.json`.
 2. `$PY "$FORGE" replace <chunk> <fix.json>`
-3. Screen those ids again. Then, to review them, get the pages with `$PY "$FORGE" source-pages <chunk> --ids a,b`, and give the reviewer only those ids and those pages, with `handwritten_notes` and the note file path. The correction editor gets both too. Never send a whole chunk back for review; repeating pages is the main cost. Output `review-N-round(K+1).json`, then `approve`.
+3. Screen those ids again. Then, to review them, get the pages with `$PY "$FORGE" source-pages <chunk> --ids a,b`, and give the reviewer only those ids and those pages, with the marks file, `handwritten_notes` and the note file path. The correction editor gets those too. Never send a whole chunk back for review; repeating pages is the main cost. Output `review-N-round(K+1).json`, then `approve`.
 4. Repeat until nothing fails. After `s.topic_change_round` rounds, have the editor choose **a different topic** in the same page range (same difficulty and type). After `s.max_rounds`, ask the user: drop that question and print a shorter book, or continue. Never print a shorter book without approval.
 
 **Decisions on a form job.** The user is watching the Studio, not the chat, so every question during the job goes there, including this one and the page tool install above. Start this with `run_in_background: true` and keep working on other chunks:
@@ -136,6 +147,6 @@ $PY "$FORGE" render "<run>/book-<name>.json" "<output>/<name>-questions.pdf" --a
 - Open the first 3 pages of the PDF and one answer page with Read to check for broken characters or overflow. You do not need to reread the questions.
 
 ## 7. Close
-Run `$PY "$FORGE" cost "<run>" --record`; it also makes later estimates more accurate. Report for each book: output path, question count, difficulty split, how many questions were rewritten in how many rounds, any thin-page reduction and its reason, any unreadable pages, how many questions rest on handwritten notes (`handwriting_questions` in the book JSON), any unreadable notes, any note that conflicts with the printed text. Add the subagent cost from that command. Keep the run folder; the user can delete it.
+Run `$PY "$FORGE" cost "<run>" --record`; it also makes later estimates more accurate. Report for each book: output path, question count, difficulty split, how many questions were rewritten in how many rounds, any thin-page reduction and its reason, any unreadable pages, how many questions rest on handwritten notes (`handwriting_questions` in the book JSON), any unreadable notes, any note that conflicts with the printed text, and marked-text coverage: how many marks have a question, the share of questions from marked text, and any mark left without one. Add the subagent cost from that command. Keep the run folder; the user can delete it.
 
 If the job came from the form, start `intake wait` in the background again and end your turn, so the next job can start from the Studio. Handle its exit as in section 1, except that on exit 4 or 5 you say nothing more than one line.

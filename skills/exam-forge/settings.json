@@ -14,6 +14,8 @@
   "split_threshold": 25,
   "chunk_pages": 20,
   "thin_page_floor": 0.6,
+  "marked_text_priority": true,
+  "marked_text_share": 0.6,
   "mcq_options": 5,
   "figure_questions": true,
   "handwritten_notes": true,

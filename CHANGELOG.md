@@ -3,6 +3,10 @@
 ## [Unreleased]
 
 ### Added
+- Marked text: highlighted or underlined text is important and gets questions first, and it never means cancelled. Only a line through the text excludes it. Every agent prompt now says so, and the settings `marked_text_priority` and `marked_text_share` (default 60% of questions at most) control the weight
+- `forge.py marks` reads highlights, underlines and strikethroughs from annotations, from pen strokes saved as ink, and from marks drawn into the page. For a drawn line, its height against the baseline decides between underline and strikethrough. It needs pymupdf; without it the agents still read marks from the page images
+- `forge.py marks-coverage` reports how many marks have a question and the share of questions from marked text, and fails when a question rests on struck text. `forge.py check --marks` makes the same failure check
+- Questions can carry `source.emphasis` and `source.mark`
 - Questions from figures: editors can use a graph, chart, diagram or labelled shape from the PDF, and the book prints the crop with the question. New command `forge.py figures`, question field `figure`, `source.kind` value `figure` and setting `figure_questions`. The reviewer opens the crop, and a missing or damaged file stops the print
 - `tools/ratchet.py`: a score ratchet for feature work. Tests come first, a better score is pushed, a worse one is undone, and a gate checks every test around a merge
 - Handwritten notes count as a source. Legible notes can carry questions, and the answer cites them as a handwritten note; unreadable ones are reported and never guessed at. A note such as "not on the exam" stays a scope instruction. The `handwritten_notes` setting turns this off

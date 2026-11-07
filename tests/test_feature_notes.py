@@ -569,12 +569,13 @@ class Prompts(unittest.TestCase):
 
     def test_editor(self):
         t = read("agents", "editor.md")
-        self.assertSays(t, "scope instruction", "struck-through", "never guess", "`handwriting`", "source.note",
+        self.assertSays(t, "scope instruction", "Struck-through", "never guess", "`handwriting`", "source.note",
                         "handwritten_notes", "unreadable notes", "conflict", "not on the exam")
 
     def test_editor_still_treats_scope_notes_as_instructions(self):
         t = read("agents", "editor.md")
-        self.assertIn('A handwritten or marked note such as "remove", "not on the exam", "out of scope", or a struck-through part, means that part is out of scope.', t)
+        self.assertIn('"remove", "not on the exam" or "out of scope". It is an instruction, not content.', t)
+        self.assertIn("Only a line through the text", t)
 
     def test_reviewer(self):
         t = read("agents", "reviewer.md")

@@ -319,6 +319,34 @@
    "max": 1
   },
   {
+   "key": "marked_text_priority",
+   "group": "questions",
+   "type": "bool",
+   "label": {
+    "en": "Priority for marked text",
+    "tr": "İşaretli metne öncelik"
+   },
+   "help": {
+    "en": "Highlighted or underlined text gets questions first. Struck-through text stays out either way.",
+    "tr": "Vurgulanmış ya da altı çizili metin önce soru alır. Üstü çizili metin her durumda dışarıda kalır."
+   }
+  },
+  {
+   "key": "marked_text_share",
+   "group": "questions",
+   "type": "float",
+   "label": {
+    "en": "Most questions from marked text",
+    "tr": "İşaretli metinden en çok soru oranı"
+   },
+   "help": {
+    "en": "Upper share of questions for marked text when marks are dense, so the rest of the pages stays covered.",
+    "tr": "İşaretler yoğunsa işaretli metne ayrılan en yüksek soru oranı; sayfaların geri kalanı da soru alır."
+   },
+   "min": 0,
+   "max": 1
+  },
+  {
    "key": "quality_preset",
    "group": "team",
    "type": "enum",

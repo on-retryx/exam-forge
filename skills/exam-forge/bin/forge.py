@@ -9,12 +9,15 @@ Commands:
   render-pages <pdf> <3-12> --out DIR   Rasterize pages to PNG (pymupdf or pdftoppm)
   figures <pdf> <3-12> --out DIR        Crop graphs, charts and diagrams to PNG (pymupdf); prints them as JSON
   notes <pdf> <3-12> --out DIR          List note annotations; crops ink to PNG (needs pymupdf)
+  marks <pdf> <3-12> [--out F]          Highlights, underlines and strikethroughs (needs pymupdf)
+  marks-coverage <chunk.json> <marks.json> [--fail-out F]  Marks with a question; fails on struck text
   plan <pdf>... [--run DIR]             Question counts, difficulty split, chunks
        [--mix 0.2,0.5,0.3]              difficulty shares for this job
        [--team editor=sonnet,...] [--effort editor=high,...] [--budget usd=5]
        [--pages file.pdf=N ...]         give the page count when it cannot be read
   check <chunk.json> [--format F] [--expected easy=2,medium=5,hard=3]
        [--mcq-options 4|5] [--min N]    --min allows a justified thin-page reduction
+       [--marks marks.json]             also fail on a question that rests on struck text
   screen <chunk.json> <screen.json>     Record screener results
   audit-sample <chunk.json> [--rate R]  Pick questions for the chief editor
   source-pages <chunk.json> --ids a,b   Pages (with one page of margin) for those ids
@@ -61,6 +64,7 @@ import sys
 import tempfile
 import threading
 import time
+import unicodedata
 import urllib.request
 import webbrowser
 from pathlib import Path
@@ -804,6 +808,332 @@ def no_page_tool():
     sys.exit(4)
 
 
+# ---------- marks ----------
+# Highlight and underline mean important. Only a line through the text means out of scope.
+ANNOTATION_MARKS = {"Highlight": "highlight", "Underline": "underline", "Squiggly": "underline",
+                    "StrikeOut": "strikethrough"}
+MARK_ROLES = {"highlight": "emphasis", "underline": "emphasis", "strikethrough": "excluded"}
+# A drawn line, measured up from the baseline as a share of the font size: from UNDER_DEPTH below it to
+# UNDER_TOP is an underline, from there to STRIKE_TOP runs through the letters, and above that it is neither.
+UNDER_DEPTH, UNDER_TOP, STRIKE_TOP = 0.45, 0.12, 0.62
+THIN_LINE, TALL_BAR = 0.35, 1.9  # bar thickness over font size: a pen line, and the tallest highlight
+MIN_FIT = 0.6  # share of a bar's length that must lie on letters
+PAGE_WIDE, PAGE_RULE, PAGE_MARGIN = 0.85, 0.4, 0.08  # of the page: ignored always, in a margin, the margin's depth
+THIN_POST, THIN_RULE, ROW_GAP = 2.5, 4, 4  # points, points, font sizes between joined rows
+IDENTITY = (1, 0, 0, 1, 0, 0)
+
+
+def turn(m, x, y):
+    return m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]
+
+
+def turn_box(m, box):
+    (x0, y0), (x1, y1) = turn(m, box[0], box[1]), turn(m, box[2], box[3])
+    return min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1)
+
+
+def page_lines(page, m):
+    """Text lines with their real baseline, which is what a line's position is measured against."""
+    lines = []
+    for block in page.get_text("rawdict")["blocks"]:
+        for line in block.get("lines", []):
+            spans = [s for s in line["spans"] if s["chars"]]
+            if not spans:
+                continue
+            main = max(spans, key=lambda s: len(s["chars"]))  # a superscript does not move the line
+            lines.append({"upright": m[0] * line["dir"][0] + m[2] * line["dir"][1] > 0.99,
+                          "baseline": turn(m, *main["origin"])[1], "size": main["size"],
+                          "chars": [(turn_box(m, c["bbox"]), c["c"]) for s in spans for c in s["chars"]]})
+    return lines
+
+
+def tidy(text):
+    return " ".join(unicodedata.normalize("NFKC", text).split())  # a PDF's "fi" is often one ligature character
+
+
+def annotation_quads(annot, m):
+    points = annot.vertices or []
+    quads = [points[i:i + 4] for i in range(0, len(points) - 3, 4)]
+    return [turn_box(m, (min(p[0] for p in q), min(p[1] for p in q), max(p[0] for p in q), max(p[1] for p in q)))
+            for q in quads] or [turn_box(m, tuple(annot.rect))]
+
+
+def annotation_marks(page, lines, m):
+    """Text comes from the quads: a rectangle around a two-line mark also holds what was not marked."""
+    marks = []
+    for annot in page.annots() or []:
+        kind = ANNOTATION_MARKS.get(annot.type[1])
+        if not kind:
+            continue
+        quads = annotation_quads(annot, m)
+        parts = ["".join(c for box, c in line["chars"]
+                         if q[0] <= (box[0] + box[2]) / 2 <= q[2] and q[1] <= (box[1] + box[3]) / 2 <= q[3])
+                 for q in quads for line in lines]
+        marks.append({"kind": kind, "origin": "annotation", "text": tidy(" ".join(parts)),
+                      "bbox": [min(q[0] for q in quads), min(q[1] for q in quads),
+                               max(q[2] for q in quads), max(q[3] for q in quads)]})
+    return marks
+
+
+def drop_annotations(page):
+    """The drawing list includes what annotations draw, and those were read already."""
+    annot = page.first_annot
+    while annot:
+        annot = page.delete_annot(annot)
+
+
+def is_marker(rgb, opacity):
+    """Highlighter ink: coloured, and see-through or pale. Grey is table shading, dark is a label."""
+    light = 0.3 * rgb[0] + 0.59 * rgb[1] + 0.11 * rgb[2]
+    return max(rgb) - min(rgb) >= 0.08 and (opacity < 0.95 or (max(rgb) >= 0.8 and light >= 0.6))
+
+
+def page_shapes(page, m):
+    """Horizontal bars that may be marks, and the vertical rules that give a table away."""
+    bars, posts = [], []
+
+    def add(x0, y0, x1, y1, colour, opacity):
+        rgb = tuple(colour) * 3 if len(colour) == 1 else tuple(colour)[:3]
+        if x1 - x0 >= 2 and opacity > 0.02 and min(rgb) < 0.97:  # white on white is not a mark
+            bars.append({"x0": x0, "y0": y0, "x1": x1, "y1": y1, "rgb": rgb, "opacity": opacity})
+
+    def boxes(d):
+        items = d["items"]
+        if all(i[0] in ("re", "qu") for i in items):
+            return [turn_box(m, tuple(i[1] if i[0] == "re" else i[1].rect)) for i in items]
+        return [turn_box(m, tuple(d["rect"]))]  # a rounded or hand-built shape counts as its outline
+
+    for d in page.get_drawings():
+        if d["type"] in ("f", "fs") and d.get("fill"):
+            opacity = 1 if d.get("fill_opacity") is None else d["fill_opacity"]
+            for x0, y0, x1, y1 in boxes(d):
+                if x1 - x0 <= THIN_POST and y1 - y0 > x1 - x0:
+                    posts.append((x0, y0, y1))
+                else:
+                    add(x0, y0, x1, y1, d["fill"], opacity)
+        if d["type"] in ("s", "fs") and d.get("color"):
+            width = d.get("width") or 1
+            opacity = 1 if d.get("stroke_opacity") is None else d["stroke_opacity"]
+            for i in d["items"]:
+                if i[0] == "l":
+                    (ax, ay), (bx, by) = turn(m, *i[1]), turn(m, *i[2])
+                    if abs(ay - by) <= 2 < abs(ax - bx):
+                        mid = (ay + by) / 2
+                        add(min(ax, bx), mid - width / 2, max(ax, bx), mid + width / 2, d["color"], opacity)
+                    elif abs(ax - bx) <= 2 < abs(ay - by):
+                        posts.append((ax, min(ay, by), max(ay, by)))
+                elif i[0] in ("re", "qu"):
+                    x0, y0, x1, y1 = turn_box(m, tuple(i[1] if i[0] == "re" else i[1].rect))
+                    if y1 - y0 <= THIN_POST:
+                        add(x0, y0, x1, y1, d["color"], opacity)
+                    else:  # a frame: its sides show it is a cell, so its bottom edge is no underline
+                        posts += [(x0, y0, y1), (x1, y0, y1)]
+    return bars, posts
+
+
+def bar_kind(bar, line):
+    """The core test: how high a bar sits above the baseline, as a share of the font size."""
+    thickness, size = bar["y1"] - bar["y0"], line["size"]
+    marker = is_marker(bar["rgb"], bar["opacity"])
+    if thickness <= THIN_LINE * size:
+        rise = (line["baseline"] - (bar["y0"] + bar["y1"]) / 2) / size
+        if rise < -UNDER_DEPTH or rise > STRIKE_TOP:
+            return None
+        if rise <= UNDER_TOP:
+            return "underline"
+        return "highlight" if marker else "strikethrough"  # marker ink never cancels anything
+    if marker and thickness <= TALL_BAR * size and bar["y0"] <= line["baseline"] - 0.25 * size <= bar["y1"]:
+        return "highlight"
+    return None
+
+
+def read_bar(bar, lines):
+    hits = []
+    for line in lines:
+        kind = line["upright"] and bar_kind(bar, line)
+        chars = [box for box, _ in line["chars"] if bar["x0"] <= (box[0] + box[2]) / 2 <= bar["x1"]] if kind else None
+        if chars:
+            hits.append((sum(box[2] - box[0] for box in chars), kind, line, chars))
+    if not hits:
+        return None
+    _, kind, line, _ = max(hits, key=lambda h: h[0])
+    row = [h for h in hits if h[1] == kind and abs(h[2]["baseline"] - line["baseline"]) <= 1]
+    if sum(h[0] for h in row) < MIN_FIT * (bar["x1"] - bar["x0"]):
+        return None  # far longer than its words: a rule, not a mark
+    boxes = [box for h in row for box in h[3]]
+    return {"kind": kind, "origin": "drawn", "baseline": line["baseline"], "size": line["size"],
+            "x0": min(b[0] for b in boxes), "x1": max(b[2] for b in boxes),
+            "top": min(b[1] for b in boxes), "bottom": max(b[3] for b in boxes)}
+
+
+def join_on_rows(found):
+    """Tools often draw one line per word."""
+    joined = []
+    for m in sorted(found, key=lambda m: (m["kind"], round(m["baseline"]), m["x0"])):
+        last = joined[-1] if joined else None
+        if last and last["kind"] == m["kind"] and abs(last["baseline"] - m["baseline"]) <= 1 \
+                and m["x0"] - last["x1"] <= m["size"]:
+            last.update(x1=max(last["x1"], m["x1"]), top=min(last["top"], m["top"]),
+                        bottom=max(last["bottom"], m["bottom"]))
+        else:
+            joined.append(dict(m))
+    return joined
+
+
+def text_of(m, lines):
+    return "".join(c for line in lines if abs(line["baseline"] - m["baseline"]) <= 1 for box, c in line["chars"]
+                   if m["x0"] <= (box[0] + box[2]) / 2 <= m["x1"])
+
+
+def join_across_rows(found, lines):
+    """One sentence marked over two lines is one mark, so one question can cover it."""
+    rows = {}
+    for line in lines:
+        if line["upright"]:
+            boxes = [box for box, _ in line["chars"]]
+            row = rows.setdefault(round(line["baseline"]), [math.inf, -math.inf])
+            row[0], row[1] = min(row[0], *(b[0] for b in boxes)), max(row[1], *(b[2] for b in boxes))
+    order = sorted(rows)
+    chains = []
+    for m in sorted(found, key=lambda m: (m["baseline"], m["x0"])):
+        y = round(m["baseline"])
+        near = order.index(y) if y in order else -1
+        above = order[near - 1] if near > 0 else None
+        for chain in chains:
+            tail = chain[-1]
+            if above is not None and tail["kind"] == m["kind"] and round(tail["baseline"]) == above \
+                    and y - above <= ROW_GAP * m["size"] and rows[above][1] - tail["x1"] <= m["size"] \
+                    and m["x0"] - rows[y][0] <= m["size"]:
+                chain.append(m)
+                break
+        else:
+            chains.append([m])
+    return [{"kind": c[0]["kind"], "origin": "drawn", "text": tidy(" ".join(text_of(m, lines) for m in c)),
+             "bbox": [min(m["x0"] for m in c), min(m["top"] for m in c),
+                      max(m["x1"] for m in c), max(m["bottom"] for m in c)]} for c in chains]
+
+
+def drawn_marks(page, lines, m, width, height):
+    bars, posts = page_shapes(page, m)
+    links = [turn_box(m, tuple(link["from"])) for link in page.get_links()]
+    found = []
+    for bar in bars:
+        length, mid = bar["x1"] - bar["x0"], (bar["y0"] + bar["y1"]) / 2
+        if length >= PAGE_WIDE * width:
+            continue
+        if bar["y1"] - bar["y0"] <= THIN_RULE:
+            if length >= PAGE_RULE * width and not PAGE_MARGIN * height <= mid <= (1 - PAGE_MARGIN) * height:
+                continue  # a header or footer rule
+            if any(bar["x0"] - 2 <= x <= bar["x1"] + 2 and top - 1.5 <= mid <= bottom + 1.5 for x, top, bottom in posts):
+                continue  # meets a vertical rule: a table
+        mark = read_bar(bar, lines)
+        if not mark:
+            continue
+        center = (mark["x0"] + mark["x1"]) / 2
+        if mark["kind"] == "underline" and any(r[0] <= center <= r[2] and r[1] <= mark["baseline"] <= r[3] for r in links):
+            continue  # how a hyperlink looks, nobody's emphasis
+        found.append(mark)
+    return join_across_rows(join_on_rows(found), lines)
+
+
+def upright_chars(lines):
+    return sum(len(line["chars"]) for line in lines if line["upright"])
+
+
+def reading_frame(page):
+    """A page turned by /Rotate reports text, annotations and drawings in ways that differ between pymupdf
+    releases. So read it all unrotated, here in memory only, then turn it the one way the text reads upright.
+    Returns the matrix and the page's size in that frame."""
+    rotated, m, size = page.rotation, tuple(page.rotation_matrix), (page.rect.width, page.rect.height)
+    page.set_rotation(0)
+    if rotated and upright_chars(page_lines(page, IDENTITY)) <= upright_chars(page_lines(page, m)):
+        return (m, *size)
+    return (IDENTITY, page.rect.width, page.rect.height)
+
+
+def ink_marks(page, lines, m):
+    """A tablet pen saves an underline as ink. A stroke that runs flat counts as a drawn line; writing does not."""
+    bars = []
+    for annot in page.annots() or []:
+        if annot.type[1] != "Ink":
+            continue
+        width = (annot.border or {}).get("width") or 1
+        opacity = 1 if annot.opacity is None or annot.opacity < 0 else annot.opacity
+        rgb = tuple((annot.colors or {}).get("stroke") or (0, 0, 0))
+        rgb = rgb * 3 if len(rgb) == 1 else rgb[:3]
+        for stroke in annot.vertices or []:
+            points = [turn(m, *p) for p in stroke]
+            xs, ys = [p[0] for p in points], [p[1] for p in points]
+            length, spread = max(xs) - min(xs), max(ys) - min(ys)
+            if length >= INK_MIN_LENGTH and spread <= INK_FLATNESS * length:
+                mid = (min(ys) + max(ys)) / 2
+                bars.append({"x0": min(xs), "y0": mid - width / 2, "x1": max(xs), "y1": mid + width / 2,
+                             "rgb": rgb, "opacity": opacity})
+    found = [mark for mark in map(lambda bar: read_bar(bar, lines), bars) if mark]
+    return [dict(mark, origin="annotation") for mark in join_across_rows(join_on_rows(found), lines)]
+
+
+def page_marks(page, number):
+    m, width, height = reading_frame(page)
+    lines = page_lines(page, m)
+    found = annotation_marks(page, lines, m) + ink_marks(page, lines, m)
+    drop_annotations(page)
+    found += drawn_marks(page, page_lines(page, m), m, width, height)
+    found.sort(key=lambda m: (round((m["bbox"][1] + m["bbox"][3]) / 16), m["bbox"][0]))
+    return [{"id": f"mark-p{number}-{n}", "page": number, "kind": f["kind"], "role": MARK_ROLES[f["kind"]],
+             "origin": f["origin"], "text": f["text"], "bbox": [round(x, 1) for x in f["bbox"]]}
+            for n, f in enumerate(found, 1)]
+
+
+def is_scanned(page):
+    return not page.get_text("text").strip() and bool(page.get_images())
+
+
+def mark_counts(marks):
+    counts = {"total": len(marks)}
+    for field, names in (("role", ("emphasis", "excluded")), ("kind", tuple(MARK_ROLES)),
+                         ("origin", ("annotation", "drawn"))):
+        for name in names:
+            counts[name] = sum(1 for m in marks if m[field] == name)
+    return counts
+
+
+def cmd_marks(a):
+    """Reader's marks in a page range. Pages without a text layer are named for a model to look at."""
+    fitz = load_fitz()
+    if not fitz:
+        print("ERROR: reading marks needs pymupdf. Run: forge.py doctor --install pdf_tool", file=sys.stderr)
+        sys.exit(4)
+    m = re.fullmatch(r"(\d+)(?:-(\d+))?", a.range)
+    if not m or int(m.group(1)) < 1 or int(m.group(2) or m.group(1)) < int(m.group(1)):
+        fail("range must look like '3' or '3-12'")
+    first, last = int(m.group(1)), int(m.group(2) or m.group(1))
+    pdf = Path(a.pdf).expanduser()
+    try:
+        doc = fitz.open(str(pdf))
+    except Exception as e:
+        fail(f"cannot open {pdf}: {e}")
+    if doc.needs_pass:
+        fail(f"{pdf} is protected by a password")
+    marks, scanned = [], []
+    for number in range(first, min(last, doc.page_count) + 1):
+        page = doc[number - 1]
+        if is_scanned(page):
+            scanned.append(number)
+        marks += page_marks(page, number)
+    result = {"pdf": pdf.name, "marks": marks, "counts": mark_counts(marks), "scanned_pages": scanned}
+    if a.out:
+        out = Path(a.out).expanduser()
+        out.parent.mkdir(parents=True, exist_ok=True)
+        write_json(out, result)
+        print(json.dumps({"out": str(out), "counts": result["counts"], "scanned_pages": scanned}, ensure_ascii=False))
+    else:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+
+
+INK_MIN_LENGTH, INK_FLATNESS = 12, 0.2  # points, and height as a share of length: a shaky hand still counts
+
+
 # ---------- figures ----------
 FIGURE_DPI = 150
 FIGURE_MIN_SIDE = 30  # points; below this it is a bullet, an icon or a rule
@@ -846,7 +1176,7 @@ def cluster_boxes(items):
     return items
 
 
-def page_marks(page):
+def page_clusters(page):
     """Images and drawings on a page as clusters, minus what only covers the whole page.
     Coordinates are those of the page before any rotation, which is what these calls report."""
     view = tuple(page.rect * page.derotation_matrix)
@@ -899,7 +1229,7 @@ def repeated_marks(doc):
     """Keys of clusters that recur across the whole file, so a chunk gets the same answer as the book."""
     pages = {}
     for page in doc:
-        for key in {cluster_key(members) for _, members in page_marks(page)}:
+        for key in {cluster_key(members) for _, members in page_clusters(page)}:
             pages[key] = pages.get(key, 0) + 1
     floor = max(FIGURE_REPEAT_PAGES, math.ceil(doc.page_count * FIGURE_REPEAT_SHARE))
     return {key for key, count in pages.items() if count >= floor}
@@ -924,7 +1254,7 @@ def crop_figures(doc, fitz, first, last, target):
     figures = []
     for number in range(first, min(last, doc.page_count) + 1):
         page = doc[number - 1]
-        keep = [box for box, members in page_marks(drawn[number - 1]) if is_figure(box, members) and cluster_key(members) not in repeated]
+        keep = [box for box, members in page_clusters(drawn[number - 1]) if is_figure(box, members) and cluster_key(members) not in repeated]
         labels = label_boxes(page) if keep else []
         crops = [(fitz.Rect(with_labels(box, labels)) + margin) * page.rotation_matrix & page.rect for box in keep]
         n = 0
@@ -1291,11 +1621,110 @@ def question_errors(q, fmt=None, page_range=None, mcq_options=None, base=None):
         e.append(f"{qid}: source must be {{pdf, section, page(int)}}")
     elif page_range and not (page_range[0] <= src["page"] <= page_range[1]):
         e.append(f"{qid}: source page {src['page']} is outside chunk range {page_range}")
+    if isinstance(src, dict):
+        if "emphasis" in src and src["emphasis"] not in ("highlight", "underline"):
+            e.append(f"{qid}: source.emphasis must be 'highlight' or 'underline'")
+        if "mark" in src and not re.fullmatch(r"mark-p\d+-\d+", str(src["mark"])):
+            e.append(f"{qid}: source.mark must look like 'mark-p12-3'")
     return e + figure_errors(q, page_range, base) + note_errors(q)
 
 
 def parse_split(text):
     return {k: int(v) for k, v in (x.split("=") for x in text.split(","))}
+
+
+# ---------- marks-coverage ----------
+def compare_words(text):
+    """Words of a quote or a mark, free of case, ligatures, line-end hyphens and dotted letters."""
+    text = unicodedata.normalize("NFKD", str(text))
+    text = "".join(c for c in text if not unicodedata.combining(c)).casefold().replace("ı", "i")
+    return re.findall(r"\w+", re.sub(r"(\w)-\s+(\w)", r"\1\2", text))
+
+
+def shared_run(a, b):
+    """Length of the longest run of words the two lists have in common."""
+    best, row = 0, [0] * (len(b) + 1)
+    for x in a:
+        row = [0] + [row[j] + 1 if x == y else 0 for j, y in enumerate(b)]
+        best = max(best, *row)
+    return best
+
+
+def rests_on(q, m):
+    """Does this question stand on this mark? By its claim, or by a quote sharing the marked words."""
+    src = q.get("source") if isinstance(q.get("source"), dict) else {}
+    if src.get("mark") == m["id"]:
+        return True
+    page, quote, marked = src.get("page"), compare_words(q.get("quote", "")), compare_words(m.get("text", ""))
+    if not isinstance(page, int) or abs(page - m["page"]) > 1 or not quote or not marked:
+        return False  # the reviewer accepts a quote within one page of source.page, so this does too
+    return shared_run(quote, marked) >= min(3, len(quote), len(marked))
+
+
+def read_marks(path):
+    marks = read_json(path)
+    marks = marks.get("marks") if isinstance(marks, dict) else None
+    if not isinstance(marks, list) or not all(isinstance(m, dict) and {"id", "page", "role"} <= set(m) for m in marks):
+        fail(f"{path} is not a marks file; make one with: forge.py marks <pdf> <range> --out <file>")
+    return marks
+
+
+def marks_report(questions, marks, page_range=None):
+    known = {m["id"] for m in marks}
+    if page_range:  # one marks file may serve a whole PDF
+        marks = [m for m in marks if page_range[0] <= m["page"] <= page_range[1]]
+    emphasis = [m for m in marks if m["role"] == "emphasis"]
+    excluded = [m for m in marks if m["role"] == "excluded"]
+    covered, emphasized, hits, unknown = set(), 0, [], []
+    for q in questions:
+        src = q.get("source") if isinstance(q.get("source"), dict) else {}
+        touched = [m["id"] for m in emphasis if rests_on(q, m)]
+        covered.update(touched)
+        emphasized += bool(touched or src.get("emphasis"))
+        hits += [{"question": q.get("id"), "mark": m["id"], "page": m["page"], "text": m.get("text", "")}
+                 for m in excluded if rests_on(q, m)]
+        if src.get("mark") and src["mark"] not in known:
+            unknown.append({"question": q.get("id"), "mark": src["mark"]})
+    missing = [{k: m.get(k) for k in ("id", "page", "kind", "text")} for m in emphasis if m["id"] not in covered]
+    share = round(emphasized / len(questions), 4) if questions else 0
+    limit, priority = S["marked_text_share"], S["marked_text_priority"]
+    return {"emphasis_marks": len(emphasis), "covered": len(covered), "missing": missing,
+            "questions": len(questions), "emphasized_questions": emphasized, "emphasized_share": share,
+            "share_limit": limit, "priority": priority, "needs_more": bool(priority and missing and share < limit),
+            "excluded_marks": len(excluded), "excluded_hits": hits, "unknown_marks": unknown}
+
+
+def marks_problems(report):
+    return [f"{h['question']}: rests on struck text, which is out of scope ({h['mark']}, page {h['page']}): "
+            f"'{h['text']}'" for h in report["excluded_hits"]] \
+        + [f"{u['question']}: source.mark {u['mark']} is not in the marks file" for u in report["unknown_marks"]]
+
+
+def cmd_marks_coverage(a):
+    data = read_json(a.chunk)
+    questions = data.get("questions") if isinstance(data, dict) else None
+    if not isinstance(questions, list):
+        fail("'questions' is missing")
+    page_range = (data["page_start"], data["page_end"]) if data.get("page_start") and data.get("page_end") else None
+    report = marks_report(questions, read_marks(a.marks), page_range)
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+    problems = marks_problems(report)
+    if not problems:
+        return
+    print("MARKS FAILED:")
+    for x in problems:
+        print(" -", x)
+    if a.fail_out:  # in the shape `approve` reads, because a verified question cannot be replaced
+        results = {}
+        for u in report["unknown_marks"]:
+            results[u["question"]] = {"id": u["question"], "status": "FAIL", "reason": "location",
+                                      "feedback": f"source.mark {u['mark']} is not in the marks file."}
+        for h in report["excluded_hits"]:
+            results[h["question"]] = {"id": h["question"], "status": "FAIL", "reason": "scope",
+                                      "feedback": f"Rests on struck text, page {h['page']} ({h['mark']}): "
+                                                  f"'{h['text']}'. Write from text that is not struck."}
+        write_json(a.fail_out, {"file": Path(a.chunk).name, "results": list(results.values())})
+    sys.exit(1)
 
 
 def cmd_check(a):
@@ -1330,6 +1759,8 @@ def cmd_check(a):
             errors.append(f"{q.get('id', '?')}: figure questions are turned off (figure_questions)")
         if rests_on_note(q) and not notes_allowed:
             errors.append(f"{q.get('id', '?')}: rests on a handwritten note, but handwritten_notes is off")
+    if a.marks:
+        errors += marks_problems(marks_report(questions, read_marks(a.marks), page_range))
     count = {z: sum(1 for q in questions if q.get("difficulty") == z) for z in DIFFICULTIES}
     reduced = False
     if a.expected:
@@ -2615,6 +3046,8 @@ def main():
     p = sub.add_parser("notes"); p.add_argument("pdf"); p.add_argument("range")
     p.add_argument("--out", required=True); p.add_argument("--dpi", type=int, default=200)
     p.set_defaults(f=cmd_notes)
+    p = sub.add_parser("marks"); p.add_argument("pdf"); p.add_argument("range"); p.add_argument("--out")
+    p.set_defaults(f=cmd_marks)
     p = sub.add_parser("plan"); p.add_argument("pdfs", nargs="+"); p.add_argument("--run")
     p.add_argument("--mix"); p.add_argument("--team"); p.add_argument("--effort"); p.add_argument("--budget")
     p.add_argument("--pages", action="append"); p.set_defaults(f=cmd_plan)
@@ -2622,7 +3055,11 @@ def main():
     p.add_argument("--expected", help="easy=2,medium=5,hard=3; separate alternatives with '|'")
     p.add_argument("--mcq-options", type=int, choices=[4, 5])
     p.add_argument("--min", type=int, help="thin-page floor from the plan (min_questions)")
+    p.add_argument("--marks", help="marks file: also fail on a question that rests on struck text")
     p.set_defaults(f=cmd_check)
+    p = sub.add_parser("marks-coverage"); p.add_argument("chunk"); p.add_argument("marks")
+    p.add_argument("--fail-out", help="write failures here in the form approve reads")
+    p.set_defaults(f=cmd_marks_coverage)
     p = sub.add_parser("screen"); p.add_argument("chunk"); p.add_argument("result"); p.set_defaults(f=cmd_screen)
     p = sub.add_parser("approve"); p.add_argument("chunk"); p.add_argument("result")
     p.add_argument("--audit", action="store_true"); p.set_defaults(f=cmd_approve)
