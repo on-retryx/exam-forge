@@ -171,6 +171,18 @@ class Ratchet(unittest.TestCase):
         code, out, _ = self.r.ratchet("gate")
         self.assertEqual((code, out["passed"]), (3, False))
 
+    def test_a_test_with_many_failing_subtests_counts_once(self):
+        self.r.write("tests/test_sub.py", """import unittest
+class Sub(unittest.TestCase):
+    def test_many(self):
+        for i in range(5):
+            with self.subTest(i=i):
+                self.assertTrue(False)
+""")
+        code, out, _ = self.r.ratchet("start", "--feature", "s", "--tests", "test_sub.py", "-m", "Tests")
+        self.assertEqual(code, 0)
+        self.assertEqual((out["feature"], out["score"]), ("0/1", 30.0))
+
     def test_status_reports_the_history(self):
         self.r.start()
         code, out, _ = self.r.ratchet("status", "--feature", "x")
