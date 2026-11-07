@@ -1,6 +1,6 @@
 {
   "name": "exam-forge",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "Turn lecture-note PDFs into a printable question book. Every question comes from your source and passes an independent review. Includes a live pixel-art studio.",
   "author": {"name": "RetryX"},
   "homepage": "https://github.com/on-retryx/exam-forge",

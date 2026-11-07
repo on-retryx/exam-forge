@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.4.0] - 2026-11-07
 
 ### Added
 - Marked text: highlighted or underlined text is important and gets questions first, and it never means cancelled. Only a line through the text excludes it. Every agent prompt now says so, and the settings `marked_text_priority` and `marked_text_share` (default 60% of questions at most) control the weight
