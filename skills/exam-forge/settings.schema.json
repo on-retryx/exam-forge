@@ -291,6 +291,19 @@
    "max": 10
   },
   {
+   "key": "handwritten_notes",
+   "group": "questions",
+   "type": "bool",
+   "label": {
+    "en": "Questions from handwritten notes",
+    "tr": "El yazısı notlardan soru"
+   },
+   "help": {
+    "en": "Legible handwritten notes in a PDF count as source material. Off, only notes about exam scope apply.",
+    "tr": "PDF'teki okunaklı el yazısı notlar kaynak sayılır. Kapalıysa yalnız sınav kapsamıyla ilgili notlar geçerli olur."
+   }
+  },
+  {
    "key": "thin_page_floor",
    "group": "questions",
    "type": "float",

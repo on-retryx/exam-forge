@@ -8,6 +8,7 @@ Commands:
   pages <pdf>                           Page count
   render-pages <pdf> <3-12> --out DIR   Rasterize pages to PNG (pymupdf or pdftoppm)
   figures <pdf> <3-12> --out DIR        Crop graphs, charts and diagrams to PNG (pymupdf); prints them as JSON
+  notes <pdf> <3-12> --out DIR          List note annotations; crops ink to PNG (needs pymupdf)
   plan <pdf>... [--run DIR]             Question counts, difficulty split, chunks
        [--mix 0.2,0.5,0.3]              difficulty shares for this job
        [--team editor=sonnet,...] [--effort editor=high,...] [--budget usd=5]
@@ -319,6 +320,7 @@ FORMATS = {
     "full-mix": {"open", "blank", "true_false", "mcq"},
 }
 TYPES = ["mcq", "open", "blank", "true_false"]
+NOTE_ID = r"note-p([1-9]\d*)-[1-9]\d*"
 LETTERS = ["A", "B", "C", "D", "E"]
 OPTION_SETS = {4: LETTERS[:4], 5: LETTERS}
 SOURCE_REFERENCES = {
@@ -331,6 +333,7 @@ SOURCE_REFERENCES = {
         r"\b(given|stated|mentioned|shown|listed|described) (above|in the)\b",
         r"\b(value|figure|number|amount) (given|stated|listed) for\b",
         r"\bthe (above|preceding) (text|table|figure|section)\b",
+        r"\bhand-?written (notes?|comments?|remarks?|annotations?)\b", r"\b(margin|marginal|sticky) notes?\b",
     ],
     "tr": [
         r"slayt", r"sunum(da|a|un)", r"\bnotlar(da|a|ın)", r"ders not",
@@ -338,6 +341,7 @@ SOURCE_REFERENCES = {
         r"yukarıdaki (metin|kaynak|bölüm)", r"bu bölümde", r"bölümüne göre", r"dokümanda",
         r"belgede", r"sayfa \d", r"\bs\. ?\d", r"yazara göre", r"tabloya göre", r"şekle göre",
         r"görselde", r"için verilen", r"yukarıda verilen", r"için belirtilen", r"yukarıda belirtilen",
+        r"el yazısı(yla)? not", r"kenar not",
     ],
 }
 SOURCE_KINDS = ["text", "figure", "handwriting"]
@@ -386,6 +390,7 @@ LABELS = {
         "mcq": "Multiple choice", "open": "Open-ended", "blank": "Fill in the blank",
         "true_false": "True / False", "fmt_mcq": "Multiple choice", "fmt_open": "Open-ended",
         "fmt_mixed": "Mixed", "fmt_full-mix": "Full mix",
+        "handwritten_note": "handwritten note",
         "guide_book_end": "Answers are at the end of the book, with a short explanation and the source of each one.",
         "guide_inline": "Each answer sits directly under its question, with a short explanation and its source.",
         "guide_section_end": "Each section ends with its answer key, with a short explanation and the source of each answer.",
@@ -401,6 +406,7 @@ LABELS = {
         "mcq": "Çoktan seçmeli", "open": "Açık uçlu", "blank": "Boşluk doldurma",
         "true_false": "Doğru / Yanlış", "fmt_mcq": "Çoktan seçmeli", "fmt_open": "Açık uçlu",
         "fmt_mixed": "Karma", "fmt_full-mix": "Tam karma",
+        "handwritten_note": "el yazısı not",
         "guide_book_end": "Cevaplar kitabın sonundadır; her cevapta kısa açıklama ve kaynak yer alır.",
         "guide_inline": "Her cevap kendi sorusunun hemen altındadır; kısa açıklama ve kaynakla birlikte.",
         "guide_section_end": "Her bölüm kendi cevap anahtarıyla biter; her cevapta kısa açıklama ve kaynak yer alır.",
@@ -899,13 +905,26 @@ def repeated_marks(doc):
     return {key for key, count in pages.items() if count >= floor}
 
 
+def without_annots(doc, fitz):
+    """An in-memory copy: get_drawings() reports annotations too, and a reader's ink is no figure."""
+    if not any(page.first_annot for page in doc):
+        return doc
+    copy = fitz.open("pdf", doc.tobytes())
+    for page in copy:
+        annot = page.first_annot
+        while annot:
+            annot = page.delete_annot(annot)
+    return copy
+
+
 def crop_figures(doc, fitz, first, last, target):
-    repeated = repeated_marks(doc)
+    drawn = without_annots(doc, fitz)
+    repeated = repeated_marks(drawn)
     margin = (-FIGURE_MARGIN, -FIGURE_MARGIN, FIGURE_MARGIN, FIGURE_MARGIN)
     figures = []
     for number in range(first, min(last, doc.page_count) + 1):
         page = doc[number - 1]
-        keep = [box for box, members in page_marks(page) if is_figure(box, members) and cluster_key(members) not in repeated]
+        keep = [box for box, members in page_marks(drawn[number - 1]) if is_figure(box, members) and cluster_key(members) not in repeated]
         labels = label_boxes(page) if keep else []
         crops = [(fitz.Rect(with_labels(box, labels)) + margin) * page.rotation_matrix & page.rect for box in keep]
         n = 0
@@ -938,6 +957,79 @@ def cmd_figures(a):
     except Exception as e:  # pymupdf has many error types, and a damaged PDF can raise any of them
         fail(f"cannot read figures from {pdf.name}: {e}")
     print(json.dumps(figures, ensure_ascii=False, indent=2))
+
+
+NOTE_KINDS = {"Ink": "ink", "FreeText": "freetext", "Text": "text"}
+NOTE_MARGIN = (-12, -12, 12, 12)  # points around a crop; ink closer than this is one piece of writing
+
+
+def join_ink(rects):
+    """Many apps save every stroke as its own annotation, and a word only reads in one piece."""
+    groups = []
+    for rect in rects:
+        grown = rect + NOTE_MARGIN
+        for g in [g for g in groups if g.intersects(grown)]:
+            rect = rect | g
+            groups.remove(g)
+        groups.append(rect)
+    return groups
+
+
+def page_notes(page, fitz, target, dpi):
+    """The notes of one page, top to bottom. Annotations keep unrotated coordinates and a crop
+    takes the ones shown, so every rect goes through the page's rotation first."""
+    typed, ink = [], []
+    for annot in page.annots() or []:
+        kind = NOTE_KINDS.get(annot.type[1])
+        rect = annot.rect * page.rotation_matrix
+        if not kind or annot.flags & fitz.PDF_ANNOT_IS_HIDDEN or not rect.intersects(page.rect):
+            continue
+        if kind == "ink":
+            ink.append(rect)
+        elif annot.info["content"].strip():
+            typed.append((rect, {"kind": kind, "text": annot.info["content"].strip()}))
+    found = typed + [(rect, {"kind": "ink"}) for rect in join_ink(ink)]
+    notes = []
+    for n, (rect, note) in enumerate(sorted(found, key=lambda x: (x[0].y0, x[0].x0)), 1):
+        id_ = f"note-p{page.number + 1}-{n}"
+        note = {"id": id_, "page": page.number + 1, "bbox": [round(v, 1) for v in rect], **note}
+        if note["kind"] == "ink":
+            path = target / f"{id_}.png"
+            page.get_pixmap(clip=(rect + NOTE_MARGIN) & page.rect, dpi=dpi).save(str(path))
+            note["file"] = str(path)
+        notes.append(note)
+    return notes
+
+
+def cmd_notes(a):
+    """Annotations only: handwriting drawn into a scanned page has none, so pages are still read as images."""
+    pdf = Path(a.pdf).expanduser().resolve()
+    m = re.fullmatch(r"(\d+)(?:-(\d+))?", a.range)
+    if not m:
+        fail("range must look like '3' or '3-12'")
+    first, last = int(m.group(1)), int(m.group(2) or m.group(1))
+    if first < 1 or last < first:
+        fail("range must count up from page 1")
+    fitz = load_fitz()
+    if not fitz:
+        print("ERROR: no page image tool found. Run: forge.py doctor --install pdf_tool", file=sys.stderr)
+        sys.exit(4)
+    try:
+        doc = fitz.open(str(pdf))
+    except Exception as e:
+        fail(f"could not open {pdf}: {e}")
+    with doc:
+        if doc.needs_pass:
+            fail(f"{pdf.name} is locked with a password")
+        if first > doc.page_count:
+            fail(f"{pdf.name} has only {doc.page_count} pages")
+        target = Path(a.out).expanduser().resolve()
+        target.mkdir(parents=True, exist_ok=True)
+        notes = []
+        for i in range(first, min(last, doc.page_count) + 1):
+            notes += page_notes(doc[i - 1], fitz, target, a.dpi)
+    print(json.dumps({"notes": notes, "pages_with_notes": sorted({n["page"] for n in notes})},
+                     ensure_ascii=False, indent=2))
 
 
 # ---------- plan ----------
@@ -1060,6 +1152,7 @@ def cmd_plan(a):
         "read_pages_supported": bool(shutil.which("pdftoppm")),
         "team": team,
         "difficulty_mix": S["difficulty_mix"],
+        "handwritten_notes": S["handwritten_notes"],
         **extra,
         "pdfs": plans,
     }
@@ -1104,8 +1197,6 @@ def figure_errors(q, page_range=None, base=None):
     src = q.get("source") if isinstance(q.get("source"), dict) else {}
     kind, fig = src.get("kind"), q.get("figure")
     e = []
-    if kind is not None and kind not in SOURCE_KINDS:
-        e.append(f"{qid}: invalid source.kind '{kind}'")
     if fig is None:
         if kind == "figure":
             e.append(f"{qid}: source.kind is 'figure' but the question has no figure")
@@ -1130,6 +1221,32 @@ def figure_errors(q, page_range=None, base=None):
             read_figure(fig, base)
         except ValueError as why:
             e.append(f"{qid}: {why}")
+    return e
+
+
+def rests_on_note(q):
+    src = q.get("source")
+    return isinstance(src, dict) and src.get("kind") == "handwriting"
+
+
+def note_errors(q):
+    """The source fields of a question that may rest on a handwritten note."""
+    src, qid = q.get("source"), q.get("id", "?")
+    if not isinstance(src, dict):
+        return []
+    e = []
+    if src.get("kind", "text") not in SOURCE_KINDS:
+        e.append(f"{qid}: source.kind must be one of {SOURCE_KINDS}")
+    if rests_on_note(q) and not str(q.get("quote") or "").strip():
+        e.append(f"{qid}: a handwriting question needs the exact transcription in 'quote'")
+    if "note" in src:
+        m = re.fullmatch(NOTE_ID, src["note"]) if isinstance(src["note"], str) else None
+        if not m:
+            e.append(f"{qid}: source.note must look like note-p12-1")
+        elif not rests_on_note(q):
+            e.append(f"{qid}: source.note belongs on a question with source.kind 'handwriting'")
+        elif int(m.group(1)) != src.get("page"):
+            e.append(f"{qid}: source.note {src['note']} is not on page {src.get('page')}")
     return e
 
 
@@ -1174,7 +1291,7 @@ def question_errors(q, fmt=None, page_range=None, mcq_options=None, base=None):
         e.append(f"{qid}: source must be {{pdf, section, page(int)}}")
     elif page_range and not (page_range[0] <= src["page"] <= page_range[1]):
         e.append(f"{qid}: source page {src['page']} is outside chunk range {page_range}")
-    return e + figure_errors(q, page_range, base)
+    return e + figure_errors(q, page_range, base) + note_errors(q)
 
 
 def parse_split(text):
@@ -1193,10 +1310,12 @@ def cmd_check(a):
     if data.get("page_start") and data.get("page_end"):
         page_range = (data["page_start"], data["page_end"])
     run = find_run(a.json)
+    notes_allowed = S["handwritten_notes"]
     if run:  # a job can set its own mix; the thin-page rule below must follow it
-        mix = json.loads((run / "plan.json").read_text(encoding="utf-8")).get("difficulty_mix")
-        if mix:
-            use_mix(mix)
+        plan = json.loads((run / "plan.json").read_text(encoding="utf-8"))
+        if plan.get("difficulty_mix"):
+            use_mix(plan["difficulty_mix"])
+        notes_allowed = plan.get("handwritten_notes", notes_allowed)  # settings apply from the next job on
     errors = []
     ids = [q.get("id") for q in questions]
     if len(set(ids)) != len(ids):
@@ -1209,6 +1328,8 @@ def cmd_check(a):
         errors += question_errors(q, fmt, page_range, a.mcq_options or S["mcq_options"], base)
         if q.get("figure") is not None and not S["figure_questions"]:
             errors.append(f"{q.get('id', '?')}: figure questions are turned off (figure_questions)")
+        if rests_on_note(q) and not notes_allowed:
+            errors.append(f"{q.get('id', '?')}: rests on a handwritten note, but handwritten_notes is off")
     count = {z: sum(1 for q in questions if q.get("difficulty") == z) for z in DIFFICULTIES}
     reduced = False
     if a.expected:
@@ -1237,7 +1358,8 @@ def cmd_check(a):
         if missing and len(questions) >= 8:
             errors.append(f"format '{fmt}' has none of: {sorted(missing)}")
     print(json.dumps({"questions": len(questions), "difficulty": count,
-                      "type": {t: sum(1 for q in questions if q.get("type") == t) for t in TYPES}},
+                      "type": {t: sum(1 for q in questions if q.get("type") == t) for t in TYPES},
+                      "handwriting": sum(1 for q in questions if rests_on_note(q))},
                      ensure_ascii=False))
     run, pdf, chunk = file_context(a.json)
     emit(run, "check", pdf=pdf, chunk=chunk, ok=not errors, questions=len(questions),
@@ -1428,12 +1550,15 @@ def cmd_merge(a):
     title = parts[0]["name"] if titles == "filename" and len(parts) == 1 else a.title
     book = {
         "title": title, "format": a.format, "language": a.language,
-        "date": dt.date.today().isoformat(), "sources": [p["pdf"] for p in parts], "parts": parts,
+        "date": dt.date.today().isoformat(), "sources": [p["pdf"] for p in parts],
+        "handwriting_questions": sum(rests_on_note(q) for p in parts for q in p["questions"]), "parts": parts,
     }
     write_json(a.out, book)
     total = sum(len(p["questions"]) for p in parts)
     emit(find_run(a.dirs[0]), "merge", questions=total, parts=len(parts), title=title)
     print(f"{total} verified questions -> {a.out}")
+    if book["handwriting_questions"]:
+        print(f'{book["handwriting_questions"]} of them rest on handwritten notes')
 
 
 # ---------- render ----------
@@ -1465,8 +1590,9 @@ def answer_text(q, L):
 
 def source_line(q, L):
     s = q["source"]
-    return (f'{L["source"]}: {esc(s["pdf"])} · {L["section"]}: {esc(s["section"])} · '
+    line = (f'{L["source"]}: {esc(s["pdf"])} · {L["section"]}: {esc(s["section"])} · '
             f'{L["page"]} {esc(s["page"])}')
+    return f'{line} · {L["handwritten_note"]}' if rests_on_note(q) else line
 
 
 def figure_html(q, base):
@@ -2486,6 +2612,9 @@ def main():
     p.set_defaults(f=cmd_render_pages)
     p = sub.add_parser("figures"); p.add_argument("pdf"); p.add_argument("range")
     p.add_argument("--out", required=True); p.set_defaults(f=cmd_figures)
+    p = sub.add_parser("notes"); p.add_argument("pdf"); p.add_argument("range")
+    p.add_argument("--out", required=True); p.add_argument("--dpi", type=int, default=200)
+    p.set_defaults(f=cmd_notes)
     p = sub.add_parser("plan"); p.add_argument("pdfs", nargs="+"); p.add_argument("--run")
     p.add_argument("--mix"); p.add_argument("--team"); p.add_argument("--effort"); p.add_argument("--budget")
     p.add_argument("--pages", action="append"); p.set_defaults(f=cmd_plan)
