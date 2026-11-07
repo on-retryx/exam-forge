@@ -222,6 +222,19 @@
    ]
   },
   {
+   "key": "figure_questions",
+   "group": "questions",
+   "type": "bool",
+   "label": {
+    "en": "Questions from figures",
+    "tr": "Şekillerden sorular"
+   },
+   "help": {
+    "en": "Editors may write questions from graphs and diagrams in the PDF, and the book prints the figure.",
+    "tr": "Editörler PDF'teki grafik ve şemalardan soru yazabilir, kitap şekli sorunun yanında basar."
+   }
+  },
+  {
    "key": "difficulty_mix",
    "group": "questions",
    "type": "mix",
@@ -276,6 +289,19 @@
    },
    "min": 0.1,
    "max": 10
+  },
+  {
+   "key": "handwritten_notes",
+   "group": "questions",
+   "type": "bool",
+   "label": {
+    "en": "Questions from handwritten notes",
+    "tr": "El yazısı notlardan soru"
+   },
+   "help": {
+    "en": "Legible handwritten notes in a PDF count as source material. Off, only notes about exam scope apply.",
+    "tr": "PDF'teki okunaklı el yazısı notlar kaynak sayılır. Kapalıysa yalnız sınav kapsamıyla ilgili notlar geçerli olur."
+   }
   },
   {
    "key": "thin_page_floor",

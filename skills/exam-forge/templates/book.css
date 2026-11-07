@@ -87,6 +87,12 @@ body {
 .tf { display: flex; gap: 12mm; margin: 1mm 0 0 2mm; font-family: "Avenir Next", Arial, sans-serif; font-size: 10pt; }
 .writing { height: 26mm; margin-top: 1mm; background-image: repeating-linear-gradient(to bottom, transparent 0, transparent 6.2mm, var(--line) 6.2mm, var(--line) 6.5mm); }
 
+/* Figures: whole, under their stem, and small enough to leave room for the options */
+.stem:has(+ .q-figure) { break-after: avoid; }
+.q-figure { margin: 0 0 2.5mm; break-inside: avoid; page-break-inside: avoid; }
+.q-figure img { display: block; max-width: 100%; max-height: 90mm; margin: 0 auto; }
+.q-figure figcaption { font-family: "Avenir Next", Arial, sans-serif; font-size: 8.5pt; color: var(--muted); text-align: center; margin-top: 1mm; }
+
 /* Answer key */
 .key { page-break-before: always; }
 .key-band { background: var(--paper); padding: 4mm 5mm; border-radius: 2mm; margin-bottom: 5mm; }
