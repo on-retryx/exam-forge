@@ -202,9 +202,10 @@ def inner_run(out, files):
     with open(os.devnull, "w") as sink:
         result = unittest.TextTestRunner(stream=sink, verbosity=0).run(suite)
     bad = [str(t) for t, _ in result.failures + result.errors]
+    broken = {getattr(t, "test_case", t).id() for t, _ in result.failures + result.errors}  # subtests share a test
     skipped = len(result.skipped)
-    ran = result.testsRun - skipped
-    Path(out).write_text(json.dumps({"passed": ran - len(bad), "total": ran, "skipped": skipped, "failed": bad}),
+    ran = max(result.testsRun - skipped, len(broken))
+    Path(out).write_text(json.dumps({"passed": ran - len(broken), "total": ran, "skipped": skipped, "failed": bad}),
                          encoding="utf-8")
 
 
