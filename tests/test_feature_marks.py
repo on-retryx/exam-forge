@@ -188,21 +188,21 @@ class InkMarks(Case):
         return page.add_ink_annot([points])
 
     def test_pen_line_under_a_word_is_emphasis(self):
-        m = self.only(lambda p: self.stroke(p, baseline(p, "energy") + 2))
+        m = self.only(lambda p: self.stroke(p, baseline(p, "energy")[0] + 2))
         self.assertEqual((m["kind"], m["role"], m["origin"]), ("underline", "emphasis", "annotation"))
         self.assertEqual(m["text"], "energy")
 
     def test_shaky_pen_line_under_a_word_is_still_emphasis(self):
-        m = self.only(lambda p: self.stroke(p, baseline(p, "energy") + 2, wobble=1.2))
+        m = self.only(lambda p: self.stroke(p, baseline(p, "energy")[0] + 2, wobble=1.2))
         self.assertEqual((m["kind"], m["role"]), ("underline", "emphasis"))
 
     def test_pen_line_through_a_word_excludes_it(self):
-        m = self.only(lambda p: self.stroke(p, baseline(p, "energy") - 4))
+        m = self.only(lambda p: self.stroke(p, baseline(p, "energy")[0] - 4))
         self.assertEqual((m["kind"], m["role"]), ("strikethrough", "excluded"))
 
     def test_highlighter_pen_is_emphasis(self):
         def build(p):
-            a = self.stroke(p, baseline(p, "energy") - 3)
+            a = self.stroke(p, baseline(p, "energy")[0] - 3)
             a.set_border(width=13)
             a.set_colors(stroke=(1, 0.9, 0))
             a.set_opacity(0.4)
@@ -212,7 +212,7 @@ class InkMarks(Case):
 
     def test_handwriting_is_no_mark(self):
         def build(p):
-            y = baseline(p, "energy") + 80
+            y = baseline(p, "energy")[0] + 80
             for i in range(8):
                 p.add_ink_annot([[(100 + i * 14, y), (106 + i * 14, y - 12), (112 + i * 14, y + 4)]])
         self.assertEqual(self.marks(self.pdf(build))["marks"], [])
@@ -224,12 +224,13 @@ class InkMarks(Case):
 
     def test_pen_underline_on_a_turned_page(self):
         def build(p):
-            self.stroke(p, baseline(p, "energy") + 2)
+            self.stroke(p, baseline(p, "energy")[0] + 2)
             p.set_rotation(90)
         m = self.only(build)
         self.assertEqual((m["kind"], m["role"], m["text"]), ("underline", "emphasis", "energy"))
 
 
+@needs_pymupdf
 class DrawnHighlights(Case):
     def test_translucent_rectangle_is_a_highlight(self):
         m = self.only(lambda p: p.draw_rect(word(p, "energy"), color=None, fill=(1, 1, 0), fill_opacity=0.4))

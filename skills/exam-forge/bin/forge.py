@@ -1051,9 +1051,32 @@ def reading_frame(page):
     return (IDENTITY, page.rect.width, page.rect.height)
 
 
+def ink_marks(page, lines, m):
+    """A tablet pen saves an underline as ink. A stroke that runs flat counts as a drawn line; writing does not."""
+    bars = []
+    for annot in page.annots() or []:
+        if annot.type[1] != "Ink":
+            continue
+        width = (annot.border or {}).get("width") or 1
+        opacity = 1 if annot.opacity is None or annot.opacity < 0 else annot.opacity
+        rgb = tuple((annot.colors or {}).get("stroke") or (0, 0, 0))
+        rgb = rgb * 3 if len(rgb) == 1 else rgb[:3]
+        for stroke in annot.vertices or []:
+            points = [turn(m, *p) for p in stroke]
+            xs, ys = [p[0] for p in points], [p[1] for p in points]
+            length, spread = max(xs) - min(xs), max(ys) - min(ys)
+            if length >= INK_MIN_LENGTH and spread <= INK_FLATNESS * length:
+                mid = (min(ys) + max(ys)) / 2
+                bars.append({"x0": min(xs), "y0": mid - width / 2, "x1": max(xs), "y1": mid + width / 2,
+                             "rgb": rgb, "opacity": opacity})
+    found = [mark for mark in map(lambda bar: read_bar(bar, lines), bars) if mark]
+    return [dict(mark, origin="annotation") for mark in join_across_rows(join_on_rows(found), lines)]
+
+
 def page_marks(page, number):
     m, width, height = reading_frame(page)
-    found = annotation_marks(page, page_lines(page, m), m)
+    lines = page_lines(page, m)
+    found = annotation_marks(page, lines, m) + ink_marks(page, lines, m)
     drop_annotations(page)
     found += drawn_marks(page, page_lines(page, m), m, width, height)
     found.sort(key=lambda m: (round((m["bbox"][1] + m["bbox"][3]) / 16), m["bbox"][0]))
@@ -1106,6 +1129,9 @@ def cmd_marks(a):
         print(json.dumps({"out": str(out), "counts": result["counts"], "scanned_pages": scanned}, ensure_ascii=False))
     else:
         print(json.dumps(result, ensure_ascii=False, indent=2))
+
+
+INK_MIN_LENGTH, INK_FLATNESS = 12, 0.2  # points, and height as a share of length: a shaky hand still counts
 
 
 # ---------- figures ----------

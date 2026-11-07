@@ -138,6 +138,53 @@ class Pipeline(unittest.TestCase):
                 page.add_highlight_annot(pymupdf.Rect(word[:4]))
         self.assertEqual(self.annotated_page(marked), [])
 
+    def marked_pdf(self):
+        doc = pymupdf.open(str(self.pdf))
+        page = doc[0]
+        page.add_highlight_annot(page.search_for("Mitochondria produce energy")[0])
+        page.add_strikeout_annot(page.search_for("Ribosomes build proteins")[0])
+        path = self.d / "lesson-marked.pdf"
+        doc.save(str(path))
+        doc.close()
+        return path
+
+    def test_all_three_features_share_one_book(self):
+        pdf = self.marked_pdf()
+        marks_file = self.run_dir / "marks-1.json"
+        self.ok("marks", pdf, "1-1", "--out", marks_file)
+        marks = json.loads(marks_file.read_text(encoding="utf-8"))["marks"]
+        self.assertEqual(sorted(m["role"] for m in marks), ["emphasis", "excluded"])
+        figures = json.loads(self.ok("figures", pdf, "1-1", "--out", self.run_dir / "figures").stdout)
+        self.assertEqual(len(figures), 1)                  # neither the ink nor the marks are figures
+        notes = json.loads(self.ok("notes", pdf, "1-1", "--out", self.run_dir / "notes").stdout)["notes"]
+        self.assertEqual([n["kind"] for n in notes], ["ink"])  # nor are the marks notes
+        marked = question(1, emphasis="highlight", mark=next(m["id"] for m in marks if m["role"] == "emphasis"))
+        fig = question(2, quote="Stage 2: 40 units", kind="figure")
+        fig["figure"] = {"id": figures[0]["id"], "page": 1, "file": figures[0]["file"], "caption": "Energy by stage"}
+        fig["question"] = "Which stage does the graph shown peak at?"
+        hand = question(3, quote="ATP is made here", kind="handwriting", note=notes[0]["id"])
+        book, html = self.finish([marked, fig, hand])
+        chunk = self.run_dir / "chunk-1.json"
+        report = json.loads(self.ok("marks-coverage", chunk, marks_file).stdout)
+        self.assertEqual(report["excluded_hits"], [])
+        self.assertEqual(book["handwriting_questions"], 1)
+        self.assertIn("data:image/png;base64,", html)
+        self.assertIn(forge.LABELS["en"]["handwritten_note"], html)
+
+    def test_struck_text_stays_out_and_highlighted_text_does_not(self):
+        pdf = self.marked_pdf()
+        marks_file = self.run_dir / "marks-1.json"
+        self.ok("marks", pdf, "1-1", "--out", marks_file)
+        chunk = self.run_dir / "chunk-1.json"
+        struck = question(1, quote="Ribosomes build proteins from amino acids.")
+        chunk.write_text(json.dumps({"source": "lesson.pdf", "chunk": 1, "format": "open", "page_start": 1, "page_end": 1,
+                                     "questions": [struck]}), encoding="utf-8")
+        self.assertNotEqual(self.cli("marks-coverage", chunk, marks_file).returncode, 0)
+        kept = question(1)
+        chunk.write_text(json.dumps({"source": "lesson.pdf", "chunk": 1, "format": "open", "page_start": 1, "page_end": 1,
+                                     "questions": [kept]}), encoding="utf-8")
+        self.ok("marks-coverage", chunk, marks_file)
+
     def test_a_question_cannot_mention_a_figure_it_does_not_have(self):
         q = question(1)
         q["question"] = "Which stage does the graph shown peak at?"

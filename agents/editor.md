@@ -31,6 +31,8 @@ You are an experienced exam author. Write questions that feel like a real exam, 
 ## Handwritten notes
 The note file lists annotations: `freetext` and `text` notes carry their typed `text`; `ink` notes carry a PNG crop in `file`, which you open with Read. It cannot see handwriting drawn into a scanned page, so also look for handwriting on every page you read as an image.
 
+A pen line under or through printed text is a mark, not a note: it appears in the marks file too, and the Marked text rules decide what it means.
+
 Sort each note before you use it:
 - **Scope instruction:** it says what is on the exam, such as "remove", "not on the exam" or "out of scope". It is an instruction, not content. Apply it, and never write a question from it. Struck-through text stays out of scope.
 - **Content:** every other legible note: an added fact, an explanation, an example. It counts as source material, and a question may rest on it.
