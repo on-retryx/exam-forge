@@ -1038,9 +1038,9 @@ class Docs(unittest.TestCase):
         readme = self.read("README.md")
         self.assertRegex(readme.split("## Install")[0], r"(?i)highlight")
         self.assertRegex(readme.split("## Türkçe özet")[1], r"(?i)vurgu|altı çizili")
-        unreleased = self.read("CHANGELOG.md").split("## [Unreleased]")[1].split("\n## [")[0]
-        self.assertRegex(unreleased, r"`?forge\.py marks`?|`marks`")
-        self.assertIn("marks-coverage", unreleased)
+        since = self.read("CHANGELOG.md").split("\n## [0.3.1]")[0]  # unreleased, or the release that shipped it
+        self.assertRegex(since, r"`?forge\.py marks`?|`marks`")
+        self.assertIn("marks-coverage", since)
 
 
 if __name__ == "__main__":

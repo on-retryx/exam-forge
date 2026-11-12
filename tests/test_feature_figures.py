@@ -205,6 +205,50 @@ class FigureFinder(Base):
         [fig] = self.figures(pdf)
         self.assertLess(fig["bbox"][3], 372)
 
+    def test_short_last_line_of_a_paragraph_above_stays_out(self):
+        """A paragraph often ends in a short line, and that line can sit right on top of the figure."""
+        box = {}
+
+        def draw(page):
+            page.insert_textbox(fitz.Rect(60, 100, 540, 200), "Running text about the topic, written as a lecture "
+                                "paragraph that goes on for a while. " * 2 + "And then two more. Its last line has seven short words.", fontsize=11)
+            lines = {}
+            for x0, y0, x1, y1, _, block, line, _ in page.get_text("words"):
+                lines[(block, line)] = (x0, y0, x1, y1) if (block, line) not in lines else (
+                    min(lines[(block, line)][0], x0), min(lines[(block, line)][1], y0), max(lines[(block, line)][2], x1), max(lines[(block, line)][3], y1))
+            box["last"] = max(lines.values(), key=lambda b: b[3])
+            assert len(lines) > 1 and 110 < box["last"][2] < 400, "the fixture needs a short last line over the picture"
+            self.picture(page, (100, box["last"][3] + 6, 450, box["last"][3] + 200))
+        [fig] = self.figures(self.pdf(draw))
+        self.assertGreaterEqual(fig["bbox"][1], box["last"][3] - 1)
+        self.assertGreaterEqual(fig["bbox"][0], 90)
+
+    def test_a_crop_never_cuts_through_a_drawing(self):
+        """Three vessels with one label line under them: the plain box on the left is part of the figure."""
+        def draw(page):
+            shape = page.new_shape()
+            shape.draw_rect(fitz.Rect(100, 300, 150, 420))
+            shape.finish(color=(0, 0, .5), fill=(.8, .9, 1), width=2)
+            shape.draw_polyline([(175, 300), (235, 300), (220, 420), (190, 420), (175, 300)])
+            shape.finish(color=(0, 0, .5), fill=(.8, .9, 1), width=2, closePath=True)
+            shape.draw_polyline([(243, 420), (303, 420), (286, 300), (260, 300), (243, 420)])
+            shape.finish(color=(0, 0, .5), fill=(.8, .9, 1), width=2, closePath=True)
+            shape.commit()
+            page.insert_text((110, 435), "Kap A          Kap B          Kap C", fontsize=10)
+        [fig] = self.figures(self.pdf(draw))
+        self.assertLessEqual(fig["bbox"][0], 99)
+        self.assertGreaterEqual(fig["bbox"][2], 304)
+
+    def test_a_drawing_far_from_the_figure_stays_out(self):
+        def draw(page):
+            self.chart(page, labels=False)
+            shape = page.new_shape()
+            shape.draw_rect(fitz.Rect(100, 600, 300, 700))
+            shape.finish(color=(0, 0, 0), fill=(.9, .9, .8))
+            shape.commit()
+        [fig] = self.figures(self.pdf(draw))
+        self.assertLess(fig["bbox"][3], 500)
+
     def test_two_figures_on_a_page_are_numbered_top_to_bottom(self):
         def draw(page):
             self.picture(page, (100, 500, 300, 700), seed=1)
@@ -770,8 +814,8 @@ class Docs(unittest.TestCase):
         self.assertRegex(text.split("## What you get")[1].split("\n## ")[0], r"(?i)figure")
         self.assertRegex(text.split("## Türkçe özet")[1], r"(?i)şekil|grafik")
 
-    def test_changelog_has_it_under_unreleased(self):
-        self.assertRegex(self.read("CHANGELOG.md").split("## [0.")[0], r"(?i)figure")
+    def test_changelog_lists_it_after_0_3_1(self):
+        self.assertRegex(self.read("CHANGELOG.md").split("\n## [0.3.1]")[0], r"(?i)figure")
 
 
 if __name__ == "__main__":
