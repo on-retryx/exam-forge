@@ -814,8 +814,8 @@ class Docs(unittest.TestCase):
         self.assertRegex(text.split("## What you get")[1].split("\n## ")[0], r"(?i)figure")
         self.assertRegex(text.split("## Türkçe özet")[1], r"(?i)şekil|grafik")
 
-    def test_changelog_has_it_under_unreleased(self):
-        self.assertRegex(self.read("CHANGELOG.md").split("## [0.")[0], r"(?i)figure")
+    def test_changelog_lists_it_after_0_3_1(self):
+        self.assertRegex(self.read("CHANGELOG.md").split("\n## [0.3.1]")[0], r"(?i)figure")
 
 
 if __name__ == "__main__":

@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- Figure crops: the short last line of a paragraph right above a figure no longer counts as a label, so the crop no longer takes it in. In a real test that line gave the answer away
+- Figure crops no longer cut through a drawing. A plain shape next to a figure, such as the first of three vessels, is now part of the crop once the crop reaches it
+
 ## [0.4.0] - 2026-11-07
 
 ### Added

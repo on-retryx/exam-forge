@@ -1203,13 +1203,15 @@ def is_figure(box, members):
 
 
 def label_boxes(page):
-    """Short lines of text on a page. Words carry their block and line numbers."""
+    """Short lines of text on a page. Words carry their block and line numbers. A short line in a block
+    that also holds a long one ends or starts a paragraph, so it is running text, not a label."""
     lines = {}
     for x0, y0, x1, y1, _, block, line, _ in page.get_text("words"):
         b = lines.setdefault((block, line), [(x0, y0, x1, y1), 0])
         b[0] = box_union(b[0], (x0, y0, x1, y1))
         b[1] += 1
-    return [box for box, words in lines.values() if words <= FIGURE_LABEL_WORDS]
+    prose = {block for (block, _), (_, words) in lines.items() if words > FIGURE_LABEL_WORDS}
+    return [box for (block, _), (box, words) in lines.items() if words <= FIGURE_LABEL_WORDS and block not in prose]
 
 
 def with_labels(box, labels):
@@ -1218,6 +1220,19 @@ def with_labels(box, labels):
         for label in labels:
             if box_near(box, label, FIGURE_LABEL_GAP):
                 box = box_union(box, label)
+    return box
+
+
+def without_cuts(box, labels, others):
+    """Grows a crop until it cuts through no drawing. A plain box next to a figure is no figure on its own,
+    but once the crop reaches it, half of it would be printed."""
+    box = with_labels(box, labels)
+    grown = True
+    while grown:
+        grown = False
+        for other in others:
+            if box_near(box, other, 0) and box_union(box, other) != box:
+                box, grown = with_labels(box_union(box, other), labels), True
     return box
 
 
@@ -1254,9 +1269,13 @@ def crop_figures(doc, fitz, first, last, target):
     figures = []
     for number in range(first, min(last, doc.page_count) + 1):
         page = doc[number - 1]
-        keep = [box for box, members in page_clusters(drawn[number - 1]) if is_figure(box, members) and cluster_key(members) not in repeated]
+        clusters = [(box, members) for box, members in page_clusters(drawn[number - 1]) if cluster_key(members) not in repeated]
+        keep = [box for box, members in clusters if is_figure(box, members)]
         labels = label_boxes(page) if keep else []
-        crops = [(fitz.Rect(with_labels(box, labels)) + margin) * page.rotation_matrix & page.rect for box in keep]
+        boxes = [without_cuts(box, labels, [other for other, _ in clusters]) for box in keep]
+        boxes = [b for i, b in enumerate(boxes) if not any(  # two figures that grew into one are printed once
+            box_union(o, b) == o and (o != b or j < i) for j, o in enumerate(boxes) if j != i)]
+        crops = [(fitz.Rect(box) + margin) * page.rotation_matrix & page.rect for box in boxes]
         n = 0
         for rect in sorted(crops, key=lambda r: (r.y0, r.x0)):
             pix = page.get_pixmap(dpi=FIGURE_DPI, clip=rect)
